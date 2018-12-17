@@ -1,0 +1,1302 @@
+---
+output:
+  html_document:
+    code_folding: none
+    fig_caption: yes
+    theme: default
+---
+# Setup
+
+
+```{r Setup, results="hide", include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message=FALSE, 
+                      warning=FALSE, fig.keep='all', 
+                      cache = TRUE, autodep = TRUE)
+```
+
+Set working directory
+```{r Set working directory, include=FALSE}
+setwd("/Users//Desktop//PR2")
+```
+
+```{r load the file, include=FALSE}
+load('movies_merged')
+```
+
+```{r Create data frame from the data, results="hide", include=FALSE}
+df = movies_merged
+cat("Dataset has", dim(df)[1], "rows and", dim(df)[2], "columns", end="\n", file="")
+colnames(df)
+dim(df)
+```
+
+## Load R packages
+
+
+```{r Import libraries, warning=FALSE, message=FALSE, results="hide", echo=FALSE, include=FALSE}
+library(ggplot2)
+library(GGally)
+library(reshape)
+library(reshape2)
+library(plyr)
+library(dplyr)
+library(MASS)
+library(png)
+```
+
+**Non-standard packages used**:
+
+```{r Non standard package, warning=FALSE, message=FALSE, results="hide", include=FALSE}
+# used the below for multiplot
+# http://www.peterhaschke.com/r/2013/04/24/MultiPlot.html
+source("http://peterhaschke.com/Code/multiplot.R")
+
+# for tm package
+# install tm package
+# install.packages("tm")
+library(tm)
+
+# install stringr package
+# install.packages("stringr")
+library(stringr)
+```
+
+# Data Preprocessing
+
+## 1. Remove non-movie rows
+
+```{r Remove all rows from df that do not correspond to movies, warning=FALSE, message=FALSE, results="hide"}
+df <- df[df$Type == "movie",]
+dim(df) # [1] 40000    39
+```
+
+## 2. Drop rows with missing `Gross` value
+
+```{r Drop rows with missing Gross value, warning=FALSE, message=FALSE, results="hide"}
+# sum(is.na(df$Gross)) # 35442
+# replace anything that is hard coded as N/A or NA to NA
+df$Gross[df$Gross=="N/A"] = NA
+df$Gross[df$Gross=="NA"] = NA
+# only movies that have 'Gross' values
+df <- df[complete.cases(df),]
+
+dim(df) # [1] 3993   39
+```
+
+
+## 3. Exclude movies released prior to 2000
+
+```{r Exclude movies released prior to 2000, warning=FALSE, message=FALSE, results="hide"}
+# df <- subset(df, Year >=2000)
+df= df[df$Year>=2000,]
+dim(df) # [1] 2846   39
+```
+
+## 4. Eliminate mismatched rows
+
+```{r Eliminate mismatched rows, warning=FALSE, message=FALSE, results="hide"}
+
+#check NA 
+sum(is.na(df$Year)) # 0
+sum(is.na(df$Date)) # 0
+sum(is.na(df$Released)) # 0
+# All of the columns have value
+# extract year from released year
+out = strsplit(as.character(df$Released), '-')
+# add to data frame
+df = data.frame(df, do.call(rbind, out))
+names(df)[names(df) == 'X1'] = 'Release_Year'
+names(df)[names(df) == 'X2'] = 'Release_Month'
+names(df)[names(df) == 'X3'] = 'Release_Day'
+
+# typeof(df$Year[1])         # "double"
+# typeof(df$Release_Year[1]) # "integer"
+# typeof(df$Date[1])         # "double"
+
+count = df$Year == df$Release_Year # logical vector TRUE if equal and FALSE if not equal
+cat("Dataset has", length(count), "rows where movie release year and year matches.", end="\n", file="")
+
+count = df$Date == df$Release_Year # logical vector TRUE if equal and FALSE if not equal
+cat("Dataset has", length(count), "rows where movie release year and date matches.", end="\n", file="")
+
+# There are no mismatches.
+
+dim(df) # [1] 2846   42
+```
+
+
+## 5. Drop `Domestic_Gross` column
+
+```{r Drop Domestic_Gross column, warning=FALSE, message=FALSE, results="hide"}
+df <- subset(df, select = -Domestic_Gross)
+dim(df) # [1] 2846   41
+```
+
+
+## 6. Process `Runtime` column
+
+```{r Process Runtime column, warning=FALSE, message=FALSE, results="hide"}
+# replace anything that is hard coded as "N/A" by 0
+df$Runtime[df$Runtime=="N/A"] = 0
+
+# replace anything that is NA by 0
+df$Runtime[is.na(df$Runtime)] = 0
+
+# split into different parts of the string
+df1 = strsplit(df$Runtime, " ", perl = TRUE)
+
+for (i in 1:length(df1)) {
+  # handle when there is no unit on second position i.e just the number
+  if (is.na(df1[[i]][2])) {
+    df$Runtime[i] = as.numeric(df1[[i]][1])
+  } 
+  # for h only, check the first part to be h and the 4th part to be NA
+  else if (((df1[[i]][2] == "h") & (is.na(df1[[i]][4])))){
+    df$Runtime[i] = (60*as.numeric(df1[[i]][1]))
+  }
+  # handle when there is h and min
+  else if ((df1[[i]][2] == "h") & (df1[[i]][4] == "min")){
+    df$Runtime[i] = ((60*as.numeric(df1[[i]][1])) + (as.numeric(df1[[i]][3])))
+  }
+  # handle when there is only min
+  else if (df1[[i]][2] == "min") {
+    df$Runtime[i] = (as.numeric(df1[[i]][1]))
+  }
+  else {
+    # ignore
+  }
+  # convert all to numeric one last time
+  df$Runtime = as.numeric(df$Runtime)
+}
+rm(df1)
+```
+```{r Convert zero to one so that you can take log later, results="hide"}
+# assign any zero value to one so that we can take log of it later
+
+any(df == 0)
+df[df == 0] <- 1
+any(df == 0)
+```
+
+## Final preprocessed dataset
+
+```{r Final preprocessed dataset - dimension, warning=FALSE, message=FALSE}
+dim(df)
+colnames(df)
+```
+
+# Evaluation Strategy
+
+```{r Randomly sample 10-20% of the preprocessed dataset and keep that aside as the **test set**, warning=FALSE, message=FALSE, results="hide"}
+# select 20 %
+set.seed(9)
+df_test = df[sample(nrow(df), 20*nrow(df)/100),]
+dim(df_test)   # [1] 569  41
+```
+
+```{r Remove test set from the clean data frame to generate trainging data set, warning=FALSE, message=FALSE, results="hide"}
+# https://stackoverflow.com/questions/17338411/delete-rows-that-exist-in-another-data-frame
+df_training = anti_join(df, df_test, by = "Title")
+dim(df_training)   # [1] 2277   41
+```
+
+```{r Create vector for train size values, warning=FALSE, message=FALSE, results="hide"}
+df_train_size = seq(10,100, length.out = 10)
+```
+
+# Tasks
+
+## 1. Numeric variables
+
+Use Linear Regression to predict `Gross` based on available _numeric_ variables. You can choose to include all or a subset of them.
+
+```{r, results="hide"}
+colnames(df_training)
+```
+
+```{r Use Linear Regression to predict Gross based on available budget, warning=FALSE, message=FALSE, results="hide"}
+
+df_num_only_budget <- NULL
+total_num_run = 10
+for (train_size in df_train_size) {
+  # print(train_size)
+  predict_train_only_budget = NULL
+  predict_test_only_budget = NULL
+  rmse_test_only_budget = NULL
+  rmse_train_only_budget = NULL
+  for (number_of_runs in 1:total_num_run) {
+    # print(number_of_runs)
+    m1_only_budget = lm(Gross~Budget, df_training[sample(nrow(df_training), train_size*nrow(df_training)/100),])
+    predict_train_only_budget = predict(m1_only_budget, df_training) # applying the model to get the gross value on train data
+    predict_test_only_budget = predict(m1_only_budget, df_test )    # predict the gross on test data using the model
+  
+    # rmse_train_only_budget = c(rmse_train_only_budget, sqrt(mean(residuals(m1_only_budget)^2)))
+    rmse_train_only_budget = c(rmse_train_only_budget, sqrt(mean(df_training$Gross - predict_train_only_budget)^2))
+    rmse_test_only_budget = c(rmse_test_only_budget, sqrt(mean((df_test$Gross - predict_test_only_budget)^2)))
+
+  }
+  df_num_only_budget <- rbind(df_num_only_budget, cbind(train_size, rmse_test_only_budget, rmse_train_only_budget))
+}
+
+df_num_only_budget <- data.frame(df_num_only_budget)
+```
+
+
+```{r Melt the data for easy plotting and plot train size vs. RMSE value budget only, warning=FALSE, message=FALSE, echo=FALSE}
+df_melt_only_budget = melt(df_num_only_budget, id = "train_size")
+
+colnames(df_melt_only_budget) <- c("train_size", "variable", "rmse")
+# colnames(df_melt) # "train_size" "variable"         "rmse"
+
+ggplot(df_melt_only_budget, aes(x = train_size, y=rmse, color = variable)) + 
+  stat_summary(fun.y = "mean", geom = "line") + 
+  scale_x_continuous(breaks = df_train_size) +
+  ggtitle("Training size vs. RMSE value for gross prediction while only using budget")
+```
+
+
+```{r Summarize the df_num_only_budget results, warning=FALSE, message=FALSE, results="hide"}
+test1 <- NULL
+train1 <- NULL
+test1 = group_by(df_num_only_budget, train_size) %>% summarize(rmse_test_only_budget = mean(rmse_test_only_budget))
+train1 = group_by(df_num_only_budget, train_size) %>% summarize(rmse_train_only_budget = mean(rmse_train_only_budget))
+```
+
+
+```{r save rmse value 1, warning=FALSE, message=FALSE, results="hide"}
+dfrmse = NULL
+dfrmse = cbind("Using only budget",floor(min(test1$rmse_test_only_budget)), floor(min(train1$rmse_train_only_budget)))
+dfrmse <- data.frame(dfrmse)
+colnames(dfrmse) <- c("Testtype", "RMSETest", "RMSETrain")
+```
+
+
+```{r remove uncessary dataframe, echo=FALSE, results="hide"}
+# rm(df_melt_only_budget, df_num_only_budget, m1_only_budget, predict_train_only_budget, predict_test_only_budget,
+#    rmse_train_only_budget,rmse_test_only_budget)
+```
+
+
+```{r Find all numeric columns, echo=FALSE, results="hide"}
+colnames(df[sapply(df,is.numeric)])
+```
+
+#### Regression with all numeric columns
+##### Year, Date and Release year reprsent the same data so data and release year are dropped
+
+
+
+```{r Using MASS library to find the better combination of variables to use 1, message=FALSE, warning=FALSE, results="hide"}
+fit <- NULL
+fit <- lm(Gross~Year+Runtime+imdbRating+imdbVotes+tomatoMeter+tomatoRating+tomatoReviews+tomatoFresh+tomatoRotten+tomatoUserMeter+tomatoUserRating+tomatoUserReviews+Budget+Date, df)
+step <- stepAIC(fit, direction="both")
+step$anova # display results
+
+# The result is:
+
+ # Runtime + imdbRating + imdbVotes + tomatoMeter + tomatoRating + 
+ #    tomatoReviews + tomatoRotten + tomatoUserMeter + tomatoUserRating + 
+ #    tomatoUserReviews + Budget
+```
+
+```{r Finding the best combination 2, message=FALSE, warning=FALSE, results="hide"}
+
+df_num <- NULL
+total_num_run = 10
+m1 <- NULL
+for (train_size in df_train_size) {
+  # print(train_size)
+  predict_train = NULL
+  predict_test = NULL
+  rmse_test = NULL
+  rmse_train = NULL
+  for (number_of_runs in 1:total_num_run) {
+    m1 = lm((Gross)~Year+Runtime+imdbRating+imdbVotes+tomatoMeter+tomatoRating+tomatoReviews+tomatoFresh+tomatoRotten+tomatoUserMeter+tomatoUserRating+tomatoUserReviews+Budget+Date, df)
+  }
+}
+
+summary(m1)
+```
+
+I will be using the result from summary analysis in this section.
+
+```{r Use Linear Regression to predict Gross based on available _numeric_ variables, warning=FALSE, message=FALSE, results="hide"}
+
+df_num <- NULL
+total_num_run = 10
+m1 <- NULL
+for (train_size in df_train_size) {
+  # print(train_size)
+  predict_train = NULL
+  predict_test = NULL
+  rmse_test = NULL
+  rmse_train = NULL
+  for (number_of_runs in 1:total_num_run) {
+    # print(number_of_runs)
+    m1 = lm(Gross~Year+Runtime+imdbRating+imdbVotes+tomatoMeter+tomatoRating+tomatoUserRating+tomatoUserReviews,
+            df_training[sample(nrow(df_training), train_size*nrow(df_training)/100),])
+    predict_train = predict(m1, df_training) # applying the model to get the gross value on train data
+    predict_test = predict(m1, df_test )    # predict the gross on test data using the model
+  
+    rmse_train = c(rmse_train, sqrt(mean((df_training$Gross - predict_train)^2)))
+    rmse_test = c(rmse_test, sqrt(mean((df_test$Gross - predict_test)^2)))
+
+  }
+  df_num <- rbind(df_num, cbind(train_size, rmse_test, rmse_train))
+}
+
+df_num <- data.frame(df_num)
+```
+
+
+```{r Melt the data for easy plotting and plot gross for other _numeric_values_, warning=FALSE, message=FALSE, echo=FALSE}
+df_melt <- NULL
+df_melt = melt(df_num, id = "train_size")
+# colnames(df_melt) # [1] "train_size" "variable"   "value"     
+# rename the columns
+colnames(df_melt) <- c("train_size", "variable", "rmse")
+ggplot(df_melt, aes(x = train_size, y=rmse, color = variable)) + 
+  stat_summary(fun.y = "mean", geom = "line") + 
+  scale_x_continuous(breaks = df_train_size) +
+  ggtitle("Training size vs. RMSE value")
+```
+
+
+```{r Summarize the df_num results, warning=FALSE, message=FALSE, results="hide"}
+test1 <- NULL
+train1 <- NULL
+test1 = group_by(df_num, train_size) %>% summarize(rmse_test = mean(rmse_test))
+train1 = group_by(df_num, train_size) %>% summarize(rmse_train = mean(rmse_train))
+```
+
+
+```{r save rmse value 2, warning=FALSE, message=FALSE, echo=FALSE, results="hide"}
+# dfrmse = rbind(dfrmse, (c("Numeric",floor(min(test1$rmse_test)), floor(min(train1$rmse_train)))))
+newRow = NULL
+newRow = data.frame(cbind("Testtype" = "Numeric", "RMSETest" = floor(min(test1$rmse_test)), "RMSETrain" = floor(min(train1$rmse_train))))
+dfrmse = rbind(dfrmse, newRow)
+```
+
+```{r Print the results for the best rmse value and the training size, warning=FALSE, message=FALSE, echo=FALSE}
+print("List the numeric variables you used.")
+print("The numerical values used  are Year, Runtime, imdbRating, imdbVotes, tomatoMeter, tomatoRating, tomatoReviews, tomatoFresh, tomatoRotten, tomatoUserMeter, tomatoUserRating, tomatoUserReviews and Budget")
+
+print("What is the best mean test RMSE value you observed, and at what training set size?")
+print(paste("The best RMSE value for test set is", floor(min(test1$rmse_test)), "at training size of", test1$train_size[test1$rmse_test==min(test1$rmse_test)], sep = " "))
+
+print("What is the best mean train RMSE value you observed, and at what training set size?")
+print(paste("The best RMSE value for train set is", floor(min(train1$rmse_train)), "at training size of", train1$train_size[train1$rmse_train==min(train1$rmse_train)], sep = " "))
+
+```
+
+
+## 2. Feature transformations
+
+```{r Using MASS library to find the better combination of variables to use 2, message=FALSE, warning=FALSE, results="hide"}
+fit <- NULL
+fit <- lm(Gross~Year+Runtime+imdbRating+imdbVotes+tomatoMeter+tomatoRating+tomatoReviews+tomatoFresh+tomatoRotten+tomatoUserMeter+tomatoUserRating+tomatoUserReviews+Budget+Date+Year^2+Runtime^2+imdbRating^2+imdbVotes^2+tomatoMeter^2+tomatoRating^2+tomatoReviews^2+tomatoFresh^2+tomatoRotten^2+tomatoUserMeter^2+tomatoUserRating^2+tomatoUserReviews^2+Budget^2+Date^2+Year^3+Runtime^3+imdbRating^3+imdbVotes^3+tomatoMeter^3+tomatoRating^3+tomatoReviews^3+tomatoFresh^3+tomatoRotten^3+tomatoUserMeter^3+tomatoUserRating^3+tomatoUserReviews^3+Budget^3+Date^3+log(Year)+log(Runtime)+log(imdbRating)+log(imdbVotes)+log(tomatoMeter)+log(tomatoRating)+log(tomatoReviews)+log(tomatoFresh)+log(tomatoRotten)+log(tomatoUserMeter)+log(tomatoUserRating)+log(tomatoUserReviews)+log(Budget)+log(Date), df)
+step <- stepAIC(fit, direction="both")
+step$anova # display results
+
+# The result is:
+
+ # Year + imdbRating + imdbVotes + tomatoMeter + tomatoRating + 
+ #    tomatoReviews + tomatoRotten + tomatoUserMeter + tomatoUserRating + 
+ #    tomatoUserReviews + Budget + log(Year) + log(Runtime) + log(imdbRating) + 
+ #    log(imdbVotes) + log(tomatoRating) + log(tomatoReviews) + 
+ #    log(tomatoUserMeter) + log(tomatoUserRating) + log(tomatoUserReviews) + 
+ #    log(Budget)
+```
+
+```{r Finding the best combination 3, message=FALSE, warning=FALSE, results="hide"}
+
+df_num <- NULL
+total_num_run = 10
+m1 <- NULL
+for (train_size in df_train_size) {
+  # print(train_size)
+  predict_train = NULL
+  predict_test = NULL
+  rmse_test = NULL
+  rmse_train = NULL
+  for (number_of_runs in 1:total_num_run) {
+    # print(number_of_runs)
+    m1 = lm((Gross)~Year+Runtime+imdbRating+imdbVotes+tomatoMeter+tomatoRating+tomatoReviews+tomatoFresh+tomatoRotten+tomatoUserMeter+tomatoUserRating+tomatoUserReviews+Budget+Date+Year^2+Runtime^2+imdbRating^2+imdbVotes^2+tomatoMeter^2+tomatoRating^2+tomatoReviews^2+tomatoFresh^2+tomatoRotten^2+tomatoUserMeter^2+tomatoUserRating^2+tomatoUserReviews^2+Budget^2+Date^2+Year^3+Runtime^3+imdbRating^3+imdbVotes^3+tomatoMeter^3+tomatoRating^3+tomatoReviews^3+tomatoFresh^3+tomatoRotten^3+tomatoUserMeter^3+tomatoUserRating^3+tomatoUserReviews^3+Budget^3+Date^3+log(Year)+log(Runtime)+log(imdbRating)+log(imdbVotes)+log(tomatoMeter)+log(tomatoRating)+log(tomatoReviews)+log(tomatoFresh)+log(tomatoRotten)+log(tomatoUserMeter)+log(tomatoUserRating)+log(tomatoUserReviews)+log(Budget)+log(Date), df)
+  }
+}
+
+summary(m1)
+
+# (Intercept)             3.362e+13  5.681e+12   5.918 3.64e-09 ***
+# Year                    2.531e+09  4.280e+08   5.914 3.75e-09 ***
+# imdbRating             -6.998e+07  1.620e+07  -4.320 1.61e-05 ***
+# imdbVotes               4.401e+02  2.478e+01  17.759  < 2e-16 ***
+# tomatoRating           -5.001e+07  1.788e+07  -2.798 0.005185 **   
+# tomatoUserMeter        -2.802e+06  7.946e+05  -3.526 0.000428 ***
+# tomatoUserRating        3.704e+08  7.400e+07   5.005 5.92e-07 ***
+# tomatoUserReviews       1.817e+00  6.383e-01   2.846 0.004455 ** 
+# Budget                  2.607e+00  6.679e-02  39.038  < 2e-16 ***
+# log(Year)              -5.091e+12  8.602e+11  -5.919 3.64e-09 ***
+# log(imdbRating)         2.560e+08  7.992e+07   3.204 0.001371 ** 
+# log(imdbVotes)         -8.934e+06  2.940e+06  -3.039 0.002394 **  
+# log(tomatoUserRating)  -8.623e+08  2.354e+08  -3.663 0.000254 ***
+# log(tomatoUserReviews)  1.640e+07  2.416e+06   6.789 1.37e-11 ***
+# log(Budget)            -1.538e+07  2.125e+06  -7.237 5.90e-13 ***
+```
+
+
+```{r Take all three transformation summary, warning=FALSE, message=FALSE, results="hide"}
+df_num <- NULL
+total_num_run = 10
+m1 <- NULL
+for (train_size in df_train_size) {
+  # print(train_size)
+  predict_train = NULL
+  predict_test = NULL
+  rmse_test = NULL
+  rmse_train = NULL
+  for (number_of_runs in 1:total_num_run) {
+    # print(number_of_runs)
+    m1 = lm((Gross)~Year+imdbRating+imdbVotes+tomatoRating+tomatoUserMeter+tomatoUserRating+tomatoUserReviews+Budget+log(Year)+log(imdbRating)+log(imdbVotes)+
+              log(tomatoUserRating) + log(tomatoUserReviews) + log(Budget), 
+            df_training[sample(nrow(df_training), train_size*nrow(df_training)/100),])
+    predict_train = predict(m1, df_training) # applying the model to get the gross value on train data
+    predict_test = predict(m1, df_test )    # predict the gross on test data using the model
+  
+    rmse_train = c(rmse_train, sqrt(mean((df_training$Gross - predict_train)^2)))
+    rmse_test = c(rmse_test, sqrt(mean((df_test$Gross - predict_test)^2)))
+
+  }
+  df_num <- rbind(df_num, cbind(train_size, rmse_test, rmse_train))
+}
+
+df_num <- data.frame(df_num)
+```
+
+```{r Melt the data for easy plotting and plot gross for all three transformation summary, warning=FALSE, message=FALSE, echo=FALSE}
+df_melt <- NULL
+df_melt = melt(df_num, id = "train_size")
+# colnames(df_melt) # [1] "train_size" "variable"   "value"     
+# rename the columns
+colnames(df_melt) <- c("train_size", "variable", "rmse")
+ggplot(df_melt, aes(x = train_size, y=rmse, color = variable)) + 
+  stat_summary(fun.y = "mean", geom = "line") + 
+  scale_x_continuous(breaks = df_train_size) +
+  ggtitle("Training size vs. RMSE value for square, cubic and log transformation_Summary")
+```
+
+```{r Summarize the df_num results for all three transformation summary, results="hide"}
+test1 <- NULL
+train1 <- NULL
+test1 = group_by(df_num, train_size) %>% summarize(rmse_test = mean(rmse_test))
+train1 = group_by(df_num, train_size) %>% summarize(rmse_train = mean(rmse_train))
+```
+
+```{r save rmse value 5 summary, warning=FALSE, message=FALSE, results="hide"}
+# dfrmse = rbind(dfrmse, (c("Numeric",floor(min(test1$rmse_test)), floor(min(train1$rmse_train)))))
+newRow = NULL
+newRow = data.frame(cbind("Testtype" = "Sq,Cu,log_Summary", "RMSETest" = floor(min(test1$rmse_test)), "RMSETrain" = floor(min(train1$rmse_train))))
+dfrmse = rbind(dfrmse, newRow)
+```
+
+```{r Take all three transformation using MASS, warning=FALSE, message=FALSE, results="hide"}
+df_num <- NULL
+total_num_run = 10
+m1 <- NULL
+for (train_size in df_train_size) {
+  # print(train_size)
+  predict_train = NULL
+  predict_test = NULL
+  rmse_test = NULL
+  rmse_train = NULL
+  for (number_of_runs in 1:total_num_run) {
+    # print(number_of_runs)
+    m1 = lm((Gross)~Year + imdbRating + imdbVotes + tomatoMeter + tomatoRating +
+    tomatoReviews + tomatoRotten + tomatoUserMeter + tomatoUserRating +
+    tomatoUserReviews + Budget + log(Year) + log(Runtime) + log(imdbRating) +
+    log(imdbVotes) + log(tomatoRating) + log(tomatoReviews) +
+    log(tomatoUserMeter) + log(tomatoUserRating) + log(tomatoUserReviews) +
+    log(Budget), 
+            df_training[sample(nrow(df_training), train_size*nrow(df_training)/100),])
+    predict_train = predict(m1, df_training) # applying the model to get the gross value on train data
+    predict_test = predict(m1, df_test )    # predict the gross on test data using the model
+  
+    rmse_train = c(rmse_train, sqrt(mean((df_training$Gross - predict_train)^2)))
+    rmse_test = c(rmse_test, sqrt(mean((df_test$Gross - predict_test)^2)))
+
+  }
+  df_num <- rbind(df_num, cbind(train_size, rmse_test, rmse_train))
+}
+
+df_num <- data.frame(df_num)
+
+```
+
+```{r Melt the data for easy plotting and plot using MASS, warning=FALSE, message=FALSE, echo=FALSE}
+df_melt <- NULL
+df_melt = melt(df_num, id = "train_size")
+# colnames(df_melt) # [1] "train_size" "variable"   "value"     
+# rename the columns
+colnames(df_melt) <- c("train_size", "variable", "rmse")
+ggplot(df_melt, aes(x = train_size, y=rmse, color = variable)) + 
+  stat_summary(fun.y = "mean", geom = "line") + 
+  scale_x_continuous(breaks = df_train_size) +
+  ggtitle("Training size vs. RMSE value for square, cubic and log transformation_MASS")
+```
+
+
+```{r Print the results for the best rmse value and the training size for all three ransformation, warning=FALSE, message=FALSE, echo=FALSE}
+print("List the numeric variables you used.")
+print("The numerical values used  are Year, imdbRating, imdbVotes, tomatoRating, tomatoUserMeter, tomatoUserRating, tomatoUserReviews, Budget, log(Year), log(imdbRating), log(imdbVotes), log(tomatoUserRating), log(tomatoUserReviews) and log(Budget).")
+
+print("What is the best mean test RMSE value you observed, and at what training set size?")
+print(paste("The best RMSE value for test set is", floor(min(test1$rmse_test)), "at training size of", test1$train_size[test1$rmse_test==min(test1$rmse_test)], sep = " "))
+
+print("What is the best mean train RMSE value you observed, and at what training set size?")
+print(paste("The best RMSE value for train set is", floor(min(train1$rmse_train)), "at training size of", train1$train_size[train1$rmse_train==min(train1$rmse_train)], sep = " "))
+```
+
+As per the compilation of results below we can see that the RMSE values improved for numeric and square & cubic transformation.
+
+```{r Summarize the df_num results 5 MASS, warning=FALSE, message=FALSE, results="hide"}
+test1 <- NULL
+train1 <- NULL
+test1 = group_by(df_num, train_size) %>% summarize(rmse_test = mean(rmse_test))
+train1 = group_by(df_num, train_size) %>% summarize(rmse_train = mean(rmse_train))
+```
+
+```{r save rmse value 5 MASS, warning=FALSE, message=FALSE, results="hide"}
+# dfrmse = rbind(dfrmse, (c("Numeric",floor(min(test1$rmse_test)), floor(min(train1$rmse_train)))))
+newRow = NULL
+newRow = data.frame(cbind("Testtype" = "Sq,Cu,log_MASS", "RMSETest" = floor(min(test1$rmse_test)), "RMSETrain" = floor(min(train1$rmse_train))))
+dfrmse = rbind(dfrmse, newRow)
+```
+
+
+```{r plot rmse different way, warning=FALSE, message=FALSE, echo=FALSE}
+dfrmse_melt <- NULL
+
+dfrmse_melt = melt(dfrmse, id = "Testtype")
+ggplot(dfrmse_melt, aes(x = Testtype, y=value, color = variable, group = 1)) + geom_point() +
+  theme(axis.text.x =
+          element_text(size  = 8,
+                       angle = 45,
+                       hjust = 1,
+                       vjust = 1)) +
+  ggtitle("Training method vs. least RMSE value") 
+```
+
+
+## 3. Non-numeric variables
+
+```{r Process genre, warning=FALSE, message=FALSE, results="hide"}
+
+# process genre
+genre_corp <- NULL
+genre_dtm <- NULL
+df_genre <- NULL
+
+genre = subset(df, select = c("Genre"))
+# replace ", " with " "
+genre$Genre = gsub(", ", " ", genre$Genre)
+# split string on "_"
+genre$Genre = gsub("-", "", genre$Genre)
+# convert genre column to binary
+genre_corp = Corpus(VectorSource(genre$Genre)) # uses the space between two string to split
+genre_dtm = DocumentTermMatrix(genre_corp)
+genre = data.frame(as.matrix(genre_dtm))
+# select top 10
+df_genre_sorted <- sort(colSums(genre), decreasing = TRUE)[1:10]
+genre <- genre[,names(df_genre_sorted)]
+dim(genre) # [1] 2846   10
+
+```
+
+
+```{r process actors, warning=FALSE, message=FALSE, results="hide"}
+# process actors
+genre_corp <- NULL
+genre_dtm <- NULL
+df_genre <- NULL
+
+actors = subset(df, select = c("Actors"))
+# replace space " " with "-"
+actors$Actors = gsub(" ", "-", actors$Actors)
+# replace ",-" with " "
+actors$Actors = gsub(",-", " ", actors$Actors)
+# split string on "-"
+actors$Actors = gsub("-", "", actors$Actors)
+# convert genre column to binary
+genre_corp = Corpus(VectorSource(actors$Actors)) # uses the space between two string to split
+genre_dtm = DocumentTermMatrix(genre_corp)
+actors = data.frame(as.matrix(genre_dtm))
+# select top 10
+actors_sorted <- sort(colSums(actors), decreasing = TRUE)[1:10]
+actors <- actors[,names(actors_sorted)]
+dim(actors) # [1] 2846   10
+```
+
+```{r Process director, warning=FALSE, message=FALSE, results="hide"}
+
+director = subset(df, select = c("Director"))
+# replace space " " with "-"
+director$Director = gsub(" ", "-", director$Director)
+# replace ",-" with " "
+director$Director = gsub(",-", " ", director$Director)
+# split string on "-"
+director$Director = gsub("-", "", director$Director)
+# convert genre column to binary
+genre_corp = Corpus(VectorSource(director$Director)) # uses the space between two string to split
+genre_dtm = DocumentTermMatrix(genre_corp)
+director = data.frame(as.matrix(genre_dtm))
+# select top 10
+director_sorted <- sort(colSums(director), decreasing = TRUE)[1:10]
+director <- director[,names(director_sorted)]
+dim(director) # [1] 2846   10
+
+```
+
+```{r Process Writers, warning=FALSE, message=FALSE, results="hide"}
+
+writer = subset(df, select = c("Writer"))
+# replace space " " with "-"
+writer$Writer = gsub(" ", "-", writer$Writer)
+# replace ",-" with " "
+writer$Writer = gsub(",-", " ", writer$Writer)
+# split string on "-"
+writer$Writer = gsub("-", "", writer$Writer)
+# convert genre column to binary
+genre_corp = Corpus(VectorSource(writer$Writer)) # uses the space between two string to split
+genre_dtm = DocumentTermMatrix(genre_corp)
+writer = data.frame(as.matrix(genre_dtm))
+# select top 10
+writer_sorted <- sort(colSums(writer), decreasing = TRUE)[1:10]
+writer <- writer[,names(writer_sorted)]
+dim(writer) # [1] 2846   10
+```
+
+
+```{r Process Language, warning=FALSE, message=FALSE, results="hide"}
+
+language = subset(df, select = c("Language"))
+# replace space " " with "-"
+language$Language = gsub(" ", "-", language$Language)
+# replace ",-" with " "
+language$Language = gsub(",-", " ", language$Language)
+# split string on "-"
+language$Language = gsub("-", "", language$Language)
+# convert genre column to binary
+genre_corp = Corpus(VectorSource(language$Language)) # uses the space between two string to split
+genre_dtm = DocumentTermMatrix(genre_corp)
+language = data.frame(as.matrix(genre_dtm))
+# select top 10
+language_sorted <- sort(colSums(language), decreasing = TRUE)[1:10]
+language <- language[,names(language_sorted)]
+dim(language) # [1] 2846   10
+```
+
+```{r Process Country, warning=FALSE, message=FALSE, results="hide"}
+
+country = subset(df, select = c("Country"))
+# replace space " " with "-"
+country$Country = gsub(" ", "-", country$Country)
+# replace ",-" with " "
+country$Country = gsub(",-", " ", country$Country)
+# split string on "-"
+country$Country = gsub("-", "", country$Country)
+# convert genre column to binary
+genre_corp = Corpus(VectorSource(country$Country)) # uses the space between two string to split
+genre_dtm = DocumentTermMatrix(genre_corp)
+country = data.frame(as.matrix(genre_dtm))
+# select top 10
+country_sorted <- sort(colSums(country), decreasing = TRUE)[1:10]
+country <- country[,names(country_sorted)]
+dim(country) # [1] 2846   10
+```
+
+
+```{r Process awards, warning=FALSE, message=FALSE, results="hide"}
+awards = subset(df, select = c("Awards"))
+# replace NA by 0
+awards$Awards[is.na(awards$Awards)] = 0
+# replace hard coded N/A by 0
+awards$Awards[awards$Awards=="N/A"] = 0
+
+# rm(vec_win, vec_nom)
+vec_win = c()
+vec_nom = c()
+
+for (i in 1:dim(awards)[1]) {
+  string = awards$Awards[i]
+  string = gsub("[.]","",string) # remove the dot [.]
+  string = as.list(strsplit(string, ' ')[[1]]) # split the string 
+    if (length(string)==2) { # case of 1 win or 1 nomination
+      if(string[2] == "win" || string[2] == "wins") {
+        vec_win = c(vec_win, as.numeric(string[1])) 
+        vec_nom = c(vec_nom, 0) # when you assign win you also need to assign nom
+      } else if(string[2] == "nomination" || string[2] == "nominations") {
+        vec_nom = c(vec_nom, as.numeric(string[1]))
+        vec_win = c(vec_win, 0)
+      } else { #
+        vec_win = c(vec_win, 0)
+        vec_nom = c(vec_nom, 0)
+      }
+    } 
+    else if (length(string)==5) { # 1 win $ 5 nominations
+      if(string[2] == "win" || string[2] == "wins") {
+        vec_win = c(vec_win, as.numeric(string[1]))
+        vec_nom = c(vec_nom, 0)
+      } else if(string[5] == "nomination" || string[5] == "nominations") {
+        vec_nom = c(vec_nom, as.numeric(string[4]))
+        #vec_win = c(vec_win, 0)
+      } else { #
+        vec_win = c(vec_win, 0)
+        vec_nom = c(vec_nom, 0)
+      }
+    }
+    else { # ignore these "Nominated for 1 Oscar. Another 13 wins & 15 nominations.""
+      vec_win = c(vec_win, 0)
+      vec_nom = c(vec_nom, 0)
+    }
+}
+# Add win and Nominations columns
+
+awards = data.frame(awards, "Win" = vec_win, "Nomination" = vec_nom)
+
+#remove Awards column
+awards = subset(awards, select = -Awards)
+dim(awards) # [1] 2846   2
+```
+
+
+```{r Now create new data frame with these required genre, actors, directors, writers, awards, language and country, warning=FALSE, message=FALSE, results="hide"}
+new_categories = cbind("Title" = df$Title, "Gross" = df$Gross, genre, actors, director, writer, language, country, awards)
+
+dim(new_categories)
+
+```
+
+```{r Randomly sample 10-20% of the preprocessed dataset and keep that aside as the **test set** part 3, warning=FALSE, message=FALSE, results="hide"}
+# select 20 %
+df_test_3 = new_categories[sample(nrow(new_categories), 20*nrow(new_categories)/100),]
+dim(df_test_3)   # [1] 569  64
+# remove test set from the clean data frame to generate trainging data set part 3
+df_training_3 = anti_join(new_categories, df_test_3, by = "Title")
+dim(df_training_3)   # [1] 2227   64
+
+# remove title from both test and train data set
+df_test_3 = subset(df_test_3, select = -Title)
+df_training_3 = subset(df_training_3, select = -Title)
+
+dim(df_test_3) # [1] 569  63
+dim(df_training_3) # [1] 2277   63
+```
+
+
+```{r Create model with all columns and find the significant columns, warning=FALSE, message=FALSE, results="hide"}
+
+df_num <- NULL
+total_num_run = 10
+m3 <- NULL
+for (train_size in df_train_size) {
+  # print(train_size)
+  predict_train = NULL
+  predict_test = NULL
+  rmse_test = NULL
+  rmse_train = NULL
+  for (number_of_runs in 1:total_num_run) {
+    # print(number_of_runs)
+    m3 = lm((Gross)~.,
+            df_training_3[sample(nrow(df_training_3), train_size*nrow(df_training_3)/100),])
+
+  }
+}
+
+summary(m3)
+ 
+# drama               -39626433    8239300  -4.809 1.62e-06 *** 
+# action               57112682    9663473   5.910 3.95e-09 ***  
+# adventure           146151526   10311213  14.174  < 2e-16 *** 
+# horror              -40855360   12411551  -3.292 0.001011 ** 
+# fantasy              70158041   12992447   5.400 7.38e-08 ***  
+# benstiller          109648323   40093395   2.735 0.006291 **  
+# johnnydepp          227638255   44584844   5.106 3.58e-07 ***  
+# ridleyscott         122476300   45678421   2.681 0.007389 **   
+# screenplay           17933692    3539614   5.067 4.39e-07 ***
+# characters           28456514    7414647   3.838 0.000128 ***  
+# storyby              52557439   11961944   4.394 1.17e-05 *** 
+# additionaldialogue   65993622   21491950   3.071 0.002162 **  
+# french               37242048   12130405   3.070 0.002166 **   
+# usa                  60122618   12220972   4.920 9.31e-07 *** 
+```
+
+
+```{r Using MASS library to find the better combination of variables to use, message=FALSE, warning=FALSE, results="hide"}
+fit <- NULL
+fit <- lm((Gross)~., df_training_3[sample(nrow(df_training_3), train_size*nrow(df_training_3)/100),])
+step <- stepAIC(fit, direction="both")
+step$anova # display results
+
+# The result is:
+
+# drama + comedy + action + adventure + crime + horror +
+#     fantasy + benstiller + adamsandler + markwahlberg + jackblack +
+#     johnnydepp + stevensoderbergh + ridleyscott + stevenspielberg +
+#     robertrodriguez + ronhoward + screenplay + story + novel +
+#     characters + storyby + additionaldialogue + spanish + french +
+#     russian + japanese + arabic + usa + germany + canada + spain +
+#     japan + Win + Nomination
+
+```
+
+```{r Create model with all columns from summary, warning=FALSE, message=FALSE, results="hide"}
+
+df_num <- NULL
+total_num_run = 10
+m3 <- NULL
+for (train_size in df_train_size) {
+  # print(train_size)
+  predict_train = NULL
+  predict_test = NULL
+  rmse_test = NULL
+  rmse_train = NULL
+  for (number_of_runs in 1:total_num_run) {
+    # print(number_of_runs)
+    m3 = lm((Gross)~drama + action + adventure + horror +
+    fantasy + benstiller + 
+    johnnydepp +  ridleyscott +  screenplay + 
+    characters + storyby + additionaldialogue + french + usa, 
+            df_training_3[sample(nrow(df_training_3), train_size*nrow(df_training_3)/100),])
+    
+    predict_train = predict(m3, df_training_3) # applying the model to get the gross value on train data
+    predict_test = predict(m3, df_test_3 )    # predict the gross on test data using the model
+  
+    rmse_train = c(rmse_train, sqrt(mean((df_training_3$Gross - predict_train)^2)))
+    rmse_test = c(rmse_test, sqrt(mean((df_test_3$Gross - predict_test)^2)))
+
+  }
+  df_num <- rbind(df_num, cbind(train_size, rmse_test, rmse_train))
+}
+
+df_num <- data.frame(df_num)
+```
+
+```{r Melt the data for easy plotting and plot gross rmse part 3 summary data, warning=FALSE, message=FALSE, echo=FALSE}
+df_melt <- NULL
+df_melt = melt(df_num, id = "train_size")
+# colnames(df_melt) # [1] "train_size" "variable"   "value"     
+# rename the columns
+colnames(df_melt) <- c("train_size", "variable", "rmse")
+ggplot(df_melt, aes(x = train_size, y=rmse, color = variable)) + 
+  stat_summary(fun.y = "mean", geom = "line") + 
+  scale_x_continuous(breaks = df_train_size) +
+  ggtitle("Training size vs. RMSE value using other categorical variables using summary data")
+```
+
+```{r Summarize the df_num results part 3 summary data, results="hide", warning=FALSE, message=FALSE}
+test1 <- NULL
+train1 <- NULL
+test1 = group_by(df_num, train_size) %>% summarize(rmse_test = mean(rmse_test))
+train1 = group_by(df_num, train_size) %>% summarize(rmse_train = mean(rmse_train))
+```
+
+```{r save rmse value part 3, warning=FALSE, message=FALSE, results="hide"}
+# dfrmse = rbind(dfrmse, (c("Numeric",floor(min(test1$rmse_test)), floor(min(train1$rmse_train)))))
+newRow = NULL
+newRow = data.frame(cbind("Testtype" = "Categorical_Summary", "RMSETest" = floor(min(test1$rmse_test)), "RMSETrain" = floor(min(train1$rmse_train))))
+dfrmse = rbind(dfrmse, newRow)
+```
+
+```{r Print the results for the best rmse value part 3 summary data, warning=FALSE, message=FALSE, echo=FALSE}
+
+print(paste("I used the following categorical variabale: drama, action, adventure, horror, fantasy, benstiller, johnnydepp, screenplay, characters, storyby, additionaldialogue, french and usa. I first converted those variables to a set of binary columns and then extracted only top 10 percent of the results to use in the model. Then I used the summary from the linear library to select the best variables. I did not use any transformation in this step.", sep = " "))
+
+print("What is the best mean test RMSE value you observed, and at what training set size?")
+print(paste("The best RMSE value for test set is", floor(min(test1$rmse_test)), "at training size of", test1$train_size[test1$rmse_test==min(test1$rmse_test)], sep = " "))
+
+print("What is the best mean train RMSE value you observed, and at what training set size?")
+print(paste("The best RMSE value for train set is", floor(min(train1$rmse_train)), "at training size of", train1$train_size[train1$rmse_train==min(train1$rmse_train)], sep = " "))
+```
+
+
+```{r Create model with all columns from MASS, warning=FALSE, message=FALSE, results="hide"}
+
+df_num <- NULL
+total_num_run = 10
+m3 <- NULL
+for (train_size in df_train_size) {
+  # print(train_size)
+  predict_train = NULL
+  predict_test = NULL
+  rmse_test = NULL
+  rmse_train = NULL
+  for (number_of_runs in 1:total_num_run) {
+    # print(number_of_runs)
+    m3 = lm((Gross)~drama + comedy + action + adventure + crime + horror +
+    fantasy + benstiller + adamsandler + markwahlberg + jackblack +
+    johnnydepp + stevensoderbergh + ridleyscott + stevenspielberg +
+    robertrodriguez + ronhoward + screenplay + story + novel +
+    characters + storyby + additionaldialogue + spanish + french +
+    russian + japanese + arabic + usa + germany + canada + spain +
+    japan + Win + Nomination, 
+            df_training_3[sample(nrow(df_training_3), train_size*nrow(df_training_3)/100),])
+    
+    predict_train = predict(m3, df_training_3) # applying the model to get the gross value on train data
+    predict_test = predict(m3, df_test_3 )    # predict the gross on test data using the model
+  
+    rmse_train = c(rmse_train, sqrt(mean((df_training_3$Gross - predict_train)^2)))
+    rmse_test = c(rmse_test, sqrt(mean((df_test_3$Gross - predict_test)^2)))
+
+  }
+  df_num <- rbind(df_num, cbind(train_size, rmse_test, rmse_train))
+}
+
+df_num <- data.frame(df_num)
+```
+
+```{r Melt the data for easy plotting and plot gross rmse part 3 MASS, warning=FALSE, message=FALSE, echo=FALSE}
+df_melt <- NULL
+df_melt = melt(df_num, id = "train_size")
+# colnames(df_melt) # [1] "train_size" "variable"   "value"     
+# rename the columns
+colnames(df_melt) <- c("train_size", "variable", "rmse")
+ggplot(df_melt, aes(x = train_size, y=rmse, color = variable)) + 
+  stat_summary(fun.y = "mean", geom = "line") + 
+  scale_x_continuous(breaks = df_train_size) +
+  ggtitle("Training size vs. RMSE value using other categorical variables using MASS")
+```
+
+```{r Print the results for the best rmse value part 3, warning=FALSE, message=FALSE, echo=FALSE}
+
+print("Explain which categorical variables you used, and how you encoded them into features.")
+print(paste("I used the following categorical variabale: drama, comedy, action, adventure, crime, horror, fantasy, benstiller, adamsandler, markwahlberg, jackblack, johnnydepp, stevensoderbergh, ridleyscott, stevenspielberg, robertrodriguez, ronhoward, screenplay, story, novel, characters, storyby, additionaldialogue, spanish, french, russian, japanese, arabic, usa, germany, canada, spain, japan, Win and Nomination. I first converted those variables to a set of binary columns and then extracted only top 10 percent of the results to use in the model. Then I used the MASS library to select the best variables to fit in the linear model. I did not use any transformation in this step.", sep = " "))
+
+print("What is the best mean test RMSE value you observed, and at what training set size?")
+print(paste("The best RMSE value for test set is", floor(min(test1$rmse_test)), "at training size of", test1$train_size[test1$rmse_test==min(test1$rmse_test)], sep = " "))
+
+print("What is the best mean train RMSE value you observed, and at what training set size?")
+print(paste("The best RMSE value for train set is", floor(min(train1$rmse_train)), "at training size of", train1$train_size[train1$rmse_train==min(train1$rmse_train)], sep = " "))
+```
+
+```{r Summarize the df_num results part 3 MASS, results="hide", warning=FALSE, message=FALSE}
+test1 <- NULL
+train1 <- NULL
+test1 = group_by(df_num, train_size) %>% summarize(rmse_test = mean(rmse_test))
+train1 = group_by(df_num, train_size) %>% summarize(rmse_train = mean(rmse_train))
+```
+
+```{r save rmse value part 3 MASS, warning=FALSE, message=FALSE, results="hide"}
+# dfrmse = rbind(dfrmse, (c("Numeric",floor(min(test1$rmse_test)), floor(min(train1$rmse_train)))))
+newRow = NULL
+newRow = data.frame(cbind("Testtype" = "Categorical_MASS", "RMSETest" = floor(min(test1$rmse_test)), "RMSETrain" = floor(min(train1$rmse_train))))
+dfrmse = rbind(dfrmse, newRow)
+```
+
+
+```{r plot rmse different way part 3 MASS, warning=FALSE, message=FALSE, echo=FALSE}
+dfrmse_melt <- NULL
+
+dfrmse_melt = melt(dfrmse, id = "Testtype")
+ggplot(dfrmse_melt, aes(x = Testtype, y=value, color = variable, group = 1)) + geom_point() +
+  theme(axis.text.x =
+          element_text(size  = 8,
+                       angle = 45,
+                       hjust = 1,
+                       vjust = 1)) +
+  ggtitle("Training method vs. least RMSE value") 
+```
+
+The RMSE value using variables selected via summary or MASS method are same.
+
+## 4. Numeric and categorical variables
+
+
+```{r Now create new data frame with these required numeric columns, warning=FALSE, message=FALSE, results="hide"}
+# new_categories = cbind("Title" = df$Title, "Gross" = df$Gross, genre, actors, director, writer, language, country, awards)
+dim(new_categories) # [1] 2846   64
+new_categories = cbind("Year" = df$Year, "Runtime"= df$Runtime, "imdbRating" = df$imdbRating,
+                       "imdbVotes" = df$imdbVotes, "tomatoMeter" = df$tomatoMeter,
+                       "tomatoRating" = df$tomatoRating,"tomatoReviews"= df$tomatoReviews,
+                       "tomatoFresh"=df$tomatoFresh, "tomatoRotten"=df$tomatoRotten,
+                       "tomatoUserMeter"=df$tomatoUserMeter, "tomatoUserRating"=df$tomatoUserRating,
+                       "tomatoUserReviews"=df$tomatoUserReviews, "Budget"=df$Budget, new_categories)
+dim(new_categories) # [1] 2846   77
+
+```
+
+```{r Randomly sample 10-20% of the preprocessed dataset and keep that aside as the **test set** part 4, warning=FALSE, message=FALSE, results="hide"}
+# select 20 %
+df_test_4 = new_categories[sample(nrow(new_categories), 20*nrow(new_categories)/100),]
+dim(df_test_4)   # [1] 569  77
+# remove test set from the clean data frame to generate trainging data set part 3
+df_training_4 = anti_join(new_categories, df_test_4, by = "Title")
+dim(df_training_4)   # [1] 2227   77
+
+# remove title from both test and train data set
+df_test_4 = subset(df_test_4, select = -Title)
+df_training_4 = subset(df_training_4, select = -Title)
+
+dim(df_test_4) # [1] 569  76
+dim(df_training_4) # [1] 2277   76
+
+# colnames(new_categories)
+# drop title column from new_categories
+new_categories <- subset(new_categories, select = -Title)
+dim(new_categories) # [1] 2846   76
+
+# check numeric columns
+# (colnames(new_categories[sapply(new_categories,is.numeric)]))
+length(colnames(new_categories[sapply(new_categories,is.numeric)])) # 76
+
+```
+
+```{r Using MASS library to find the better combination of variables to use part 4, message=FALSE, warning=FALSE, results="hide"}
+fit <- NULL
+fit <- lm((Gross)~.,new_categories)
+step <- stepAIC(fit, direction="both")
+step$anova # display results
+
+# The result is:
+
+# Runtime + imdbRating + imdbVotes + tomatoMeter + tomatoRating +
+#     tomatoReviews + tomatoRotten + tomatoUserMeter + tomatoUserRating +
+#     tomatoUserReviews + Budget + drama + comedy + action + adventure +
+#     crime + horror + owenwilson + benstiller + adamsandler +
+#     brucewillis + ridleyscott + story + novel + characters +
+#     screenstory + additionaldialogue + english + german + mandarin +
+#     cantonese + germany + australia + Nomination
+
+```
+
+```{r Create model with all columns from MASS part 4, warning=FALSE, message=FALSE, results="hide"}
+
+df_num <- NULL
+total_num_run = 10
+m3 <- NULL
+for (train_size in df_train_size) {
+  # print(train_size)
+  predict_train = NULL
+  predict_test = NULL
+  rmse_test = NULL
+  rmse_train = NULL
+  for (number_of_runs in 1:total_num_run) {
+    # print(number_of_runs)
+    m3 = lm((Gross)~Runtime + imdbRating + imdbVotes + tomatoMeter + tomatoRating +
+    tomatoReviews + tomatoRotten + tomatoUserMeter + tomatoUserRating +
+    tomatoUserReviews + Budget + drama + comedy + action + adventure +
+    crime + horror + owenwilson + benstiller + adamsandler +
+    brucewillis + ridleyscott + story + novel + characters +
+    screenstory + additionaldialogue + english + german + mandarin +
+    cantonese + germany + australia + Nomination, 
+            df_training_4[sample(nrow(df_training_4), train_size*nrow(df_training_4)/100),])
+    
+    predict_train = predict(m3, df_training_4) # applying the model to get the gross value on train data
+    predict_test = predict(m3, df_test_4 )    # predict the gross on test data using the model
+  
+    rmse_train = c(rmse_train, sqrt(mean((df_training_4$Gross - predict_train)^2)))
+    rmse_test = c(rmse_test, sqrt(mean((df_test_4$Gross - predict_test)^2)))
+
+  }
+  df_num <- rbind(df_num, cbind(train_size, rmse_test, rmse_train))
+}
+
+df_num <- data.frame(df_num)
+```
+
+```{r Melt the data for easy plotting and plot gross rmse part 4 MASS, warning=FALSE, message=FALSE, echo=FALSE}
+df_melt <- NULL
+df_melt = melt(df_num, id = "train_size")
+# colnames(df_melt) # [1] "train_size" "variable"   "value"     
+# rename the columns
+colnames(df_melt) <- c("train_size", "variable", "rmse")
+ggplot(df_melt, aes(x = train_size, y=rmse, color = variable)) + 
+  stat_summary(fun.y = "mean", geom = "line") + 
+  scale_x_continuous(breaks = df_train_size) +
+  ggtitle("Training size vs. RMSE value for part 4 using MASS")
+```
+
+
+```{r Summarize the df_num results part 4 MASS, warning=FALSE, message=FALSE, results="hide"}
+test1 <- NULL
+train1 <- NULL
+test1 = group_by(df_num, train_size) %>% summarize(rmse_test = mean(rmse_test))
+train1 = group_by(df_num, train_size) %>% summarize(rmse_train = mean(rmse_train))
+```
+
+```{r save rmse value part 4 MASS, warning=FALSE, message=FALSE, results="hide"}
+# dfrmse = rbind(dfrmse, (c("Numeric",floor(min(test1$rmse_test)), floor(min(train1$rmse_train)))))
+newRow = NULL
+newRow = data.frame(cbind("Testtype" = "Part4_no_trans_MASS", "RMSETest" = floor(min(test1$rmse_test)), "RMSETrain" = floor(min(train1$rmse_train))))
+dfrmse = rbind(dfrmse, newRow)
+
+```
+
+```{r plot rmse different way part 4 MASS, warning=FALSE, message=FALSE, echo=FALSE}
+dfrmse_melt <- NULL
+
+dfrmse_melt = melt(dfrmse, id = "Testtype")
+ggplot(dfrmse_melt, aes(x = Testtype, y=value, color = variable, group = 1)) + geom_point() +
+  theme(axis.text.x =
+          element_text(size  = 8,
+                       angle = 45,
+                       hjust = 1,
+                       vjust = 1)) +
+  ggtitle("Training method vs. least RMSE value") 
+```
+
+
+## 5. Additional features
+
+```{r Bin budget, warning=FALSE, message=FALSE, results="hide"}
+# https://piazza.com/class/j6gt7ycx6nk145?cid=1071
+# colnames(new_categories)
+# budget <- subset(new_categories, select = c("Gross", "Budget"))
+# summary(budget)
+# min(budget$Budget)
+# max(budget$Budget)
+bin_budget = seq(min(new_categories$Budget),max(new_categories$Budget), length.out = 5)
+bin_budget
+
+
+# add new columns
+dim(new_categories) # [1] 2846   76
+new_categories[c("X1", "X2", "X3", "X4", "X5")] <- NA
+dim(new_categories) # [1] 2846   81
+
+# fill in with boolean indicators
+if(new_categories$Budget<bin_budget[1]) {
+  new_categories$X1 = 1
+  new_categories$X2 = 0
+  new_categories$X3 = 0
+  new_categories$X4 = 0
+  new_categories$X5 = 0
+}
+ 
+ if(new_categories$Budget<bin_budget[2]) {
+  new_categories$X1 = 0
+  new_categories$X2 = 1
+  new_categories$X3 = 0
+  new_categories$X4 = 0
+  new_categories$X5 = 0
+ }
+ 
+ if(new_categories$Budget<bin_budget[3]) {
+  new_categories$X1 = 0
+  new_categories$X2 = 0
+  new_categories$X3 = 1
+  new_categories$X4 = 0
+  new_categories$X5 = 0
+ }
+ 
+ if(new_categories$Budget<bin_budget[4]) {
+  new_categories$X1 = 0
+  new_categories$X2 = 0
+  new_categories$X3 = 0
+  new_categories$X4 = 4
+  new_categories$X5 = 0
+ }
+ 
+ if(new_categories$Budget<bin_budget[5]) {
+  new_categories$X1 = 0
+  new_categories$X2 = 0
+  new_categories$X3 = 0
+  new_categories$X4 = 0
+  new_categories$X5 = 1
+ }
+
+
+bin_test = new_categories[sample(nrow(new_categories), 20*nrow(new_categories)/100),]
+dim(bin_test)   # [1] 569  81
+# remove test set from the clean data frame to generate trainging data set part 3
+bin_train = anti_join(new_categories, bin_test, by = "Gross")
+dim(bin_train)   # [1] 2228   81
+
+# check numeric columns
+length(colnames(new_categories[sapply(new_categories,is.numeric)])) # 81
+
+df_bin <- NULL
+total_num_run = 10
+model_bin <- NULL
+for (train_size in df_train_size) {
+  # print(train_size)
+  predict_train = NULL
+  predict_test = NULL
+  rmse_test = NULL
+  rmse_train = NULL
+  for (number_of_runs in 1:total_num_run) {
+    # print(number_of_runs)
+    model_bin = lm((Gross)~.,new_categories)
+    
+    predict_train = predict(model_bin, bin_train) # applying the model to get the gross value on train data
+    predict_test = predict(model_bin, bin_test )    # predict the gross on test data using the model
+  
+    rmse_train = c(rmse_train, sqrt(mean((bin_train$Gross - predict_train)^2)))
+    rmse_test = c(rmse_test, sqrt(mean((bin_test$Gross - predict_test)^2)))
+
+  }
+  df_bin <- rbind(df_bin, cbind(train_size, rmse_test, rmse_train))
+}
+
+df_bin <- data.frame(df_bin)
+
+```
+
+
+```{r Melt the data for easy plotting and plot gross rmse part 5 binning, warning=FALSE, message=FALSE, echo=FALSE}
+df_melt <- NULL
+df_melt = melt(df_num, id = "train_size")
+# colnames(df_melt) # [1] "train_size" "variable"   "value"     
+# rename the columns
+colnames(df_melt) <- c("train_size", "variable", "rmse")
+ggplot(df_melt, aes(x = train_size, y=rmse, color = variable)) + 
+  stat_summary(fun.y = "mean", geom = "line") + 
+  scale_x_continuous(breaks = df_train_size) +
+  ggtitle("Training size vs. RMSE value for part 5 binning")
+```
+
+
+```{r Summarize the df_num results part 5 binning, warning=FALSE, message=FALSE, results="hide"}
+test1 <- NULL
+train1 <- NULL
+test1 = group_by(df_num, train_size) %>% summarize(rmse_test = mean(rmse_test))
+train1 = group_by(df_num, train_size) %>% summarize(rmse_train = mean(rmse_train))
+```
+
+```{r save rmse value part 5 binning, warning=FALSE, message=FALSE, results="hide"}
+newRow = NULL
+newRow = data.frame(cbind("Testtype" = "Part5_binning", "RMSETest" = floor(min(test1$rmse_test)), "RMSETrain" = floor(min(train1$rmse_train))))
+dfrmse = rbind(dfrmse, newRow)
+```
+
+
+```{r plot rmse different way part 5 binning, warning=FALSE, message=FALSE, echo=FALSE}
+dfrmse_melt <- NULL
+
+dfrmse_melt = melt(dfrmse, id = "Testtype")
+ggplot(dfrmse_melt, aes(x = Testtype, y=value, color = variable, group = 1)) + geom_point() +
+  theme(axis.text.x =
+          element_text(size  = 8,
+                       angle = 45,
+                       hjust = 1,
+                       vjust = 1)) +
+  ggtitle("Training method vs. least RMSE value with part 5 binning") 
+
+#Check whythe graph is wierd.
+
+```
+
+```{r}
+print("The RMSE value did not change than for part when even when the budget was binned. This could mean that the budget is not as significant as it seems.")
+```
+
+```{r}
+dfrmse
+```
+
+**displaying proper image with final data**
+```{r}
+img1_path <- "/Users//Desktop//final.png"
+img1 <- readPNG(img1_path, native = TRUE, info = TRUE)
+plot(0:1,0:1,type="n",ann=FALSE,axes=FALSE)
+rasterImage(img1,0,0,1,1)
+```

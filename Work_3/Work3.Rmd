@@ -1,0 +1,656 @@
+---
+output: 
+  html_document: 
+    fig_caption: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message=FALSE, 
+                      warning=FALSE, fig.keep='all', 
+                      cache = TRUE, autodep = TRUE)
+```
+
+
+```{r Install required packages}
+# install.packages("Amelia")
+```
+
+```{r Import libraries}
+library(ggplot2)
+library(Amelia)
+library(knitr)
+```
+
+### Problems
+#### 1. Data Preprocessing 
+
+Set working directory
+```{r Set working directory}
+setwd("/////")
+```
+
+Read mnist_train.csv and mnist_test.csv separately.
+```{r Read data}
+train = read.csv("mnist_train.csv", header = FALSE)
+test = read.csv("mnist_test.csv", header = FALSE)
+```
+
+#### Subset the training data
+Partition the training set for classification of 0, 1 and 3, 5 classes based on the class label (last row, 785): train_0_1 (should have all training samples with label 0 or 1), train_3_5 (label 3 or 5).
+
+```{r Subset the training data}
+# https://stackoverflow.com/questions/33023713/r-how-to-subset-columns-based-on-values-of-the-first-row
+train_0_1 = train[,train[nrow(train),] == 0 | train[nrow(train),] == 1]
+train_3_5 = train[,train[nrow(train),] == 3 | train[nrow(train),] == 5]
+```
+
+
+#### Subset the training data
+Do the same for the test set: test_0_1, test_3_5. Print the dimensions of each partition to check how many samples you have.
+
+```{r Subset the test data}
+test_0_1 = test[,test[nrow(train),] == 0 | test[nrow(train),] == 1]
+test_3_5 = test[,test[nrow(train),] == 3 | test[nrow(train),] == 5]
+```
+
+
+#### Remove true class label
+Separate the true class label from all the partitions created (remove row 785 from the actual image data and store it as a separate vector).
+
+```{r Remove true class label}
+# https://stat.ethz.ch/pipermail/r-help/2012-December/343413.html
+train_data_0_1 = train_0_1[-nrow(train_0_1),] # skips the last row (-785)
+test_data_0_1 = test_0_1[-nrow(test_0_1),]
+train_labels_0_1 = train_0_1[nrow(train_0_1),]
+test_labels_0_1 = test_0_1[nrow(test_0_1),]
+
+train_data_3_5 = train_3_5[-nrow(train_3_5),]
+test_data_3_5 = test_3_5[-nrow(test_3_5),]
+train_labels_3_5 = train_3_5[nrow(train_3_5),]
+test_labels_3_5 = test_3_5[nrow(test_3_5),]
+```
+
+
+#### Image visualization preprocessing
+
+Visualize 1 image from each class to ensure you have read in the data correctly. So you should show 4 images, with labels 0, 1, 3 and 5.
+
+```{r Image visualization preprocessing}
+# http://stat.ethz.ch/R-manual/R-devel/library/base/html/data.matrix.html
+# get all required matrices
+mat_0 = data.matrix(train_data_0_1[1], rownames.force = NA) # take first col
+mat_1 = data.matrix(train_data_0_1[ncol(train_data_0_1)], rownames.force = NA) # take last col
+mat_3 = data.matrix(train_data_3_5[1], rownames.force = NA) # take first col
+mat_5 = data.matrix(train_data_3_5[ncol(train_data_3_5)], rownames.force = NA) # take last col
+
+# https://www.r-bloggers.com/creating-an-image-of-a-matrix-in-r-using-image/
+N.ROW = sqrt(nrow(train_data_0_1)) # get number of rows reqired to form 2 D matrix
+
+# from 2 D matrices
+mat_0 = matrix(mat_0, nrow = N.ROW)
+mat_1 = matrix(mat_1, nrow = N.ROW)
+mat_3 = matrix(mat_3, nrow = N.ROW)
+mat_5 = matrix(mat_5, nrow = N.ROW)
+
+rotate <- function(x) t(apply(x, 2, rev))
+```
+
+#### Display actual image
+```{r Display image}
+image(rotate(mat_0)) + title("Zero")
+image(rotate(mat_1)) + title("One")
+image(rotate(mat_3)) + title("Three")
+image(rotate(mat_5)) + title("Five")
+```
+
+
+#### 3. Implementation 
+
+#### Check missing values
+```{r Check missing values, results='hide', fig.keep='all'}
+sapply(train_data_0_1,function(x) sum(is.na(x)))
+sapply(train_data_0_1, function(x) length(unique(x)))
+```
+
+#### Visualize missing data 1 and 0
+```{r Visualize missing data 1 and 0}
+missmap(train_data_0_1, main = "Missing values vs observed for 1 and 0")
+```
+
+#### Visualize missing data 3 and 5
+```{r Visualize missing data 3 and 5}
+# library(Amelia)
+missmap(train_data_3_5, main = "Missing values vs observed for 3 and 5")
+```
+
+
+No missing data for both 0/1 and 3/5 training set
+
+```{r Clear train and predict function}
+rm(train, predict)
+```
+
+#### Train and predict funtions
+```{r Train and predict functions}
+# https://www.ocf.berkeley.edu/~janastas/stochastic-gradient-descent-in-r.html
+
+train <- function (data, labels, alpha){
+  # set epoch and epsilon
+   epoch = 25000
+   epsilon = 0.0001
+  # convert data and labels to matrix
+  data = as.matrix(data)
+  labels = as.matrix(labels)
+  # add bias term (1) to data and label
+  data <- cbind(data, c(rep(1, nrow(data))))
+  labels <- c(labels, 1)
+  
+  # http://www.cookbook-r.com/Numbers/Generating_random_numbers/
+  # initiliaze theta_start with normal distribution
+  # theta_start = (rnorm(nrow(data)))
+  # initialize theta_start with random number between 0 and 1
+  theta_start = runif(nrow(data))
+  print(paste("Length of theta_start = ", length(theta_start)))
+  theta <- NULL
+  N = ncol(data)  # can also take ncol(y)
+  gamma = (theta_start %*% as.matrix(data)) - (labels)
+  gradient = (1/N) * as.matrix(gamma)%*%t(as.matrix(data))
+
+  for (i in 1:epoch) {
+    gamma = (theta_start %*% as.matrix(data)) - (labels)
+   	# gradient = (1/N) * gamma%*%t(as.matrix(data))
+   	gradient = (1/N) * as.matrix(gamma)%*%t(as.matrix(data))
+
+    theta_start <- theta_start - alpha*gradient
+    
+    if (sqrt(sum(!(is.na(gradient))^2)) <= epsilon) {  # need to do only for non NA
+      break
+    }
+    
+    theta <- theta_start
+    
+
+  }
+  print(paste("Convergence at epoch: ", i))
+  theta = na.omit(theta) 
+  return (as.vector(theta)) 
+}
+
+predict = function(theta, data) {
+   # convert data to matrix
+  data = as.matrix(data)
+  label_start = rep(0, nrow(data))
+  label_start = 1/(1+exp(-theta%*%as.matrix(data)))
+  labels = ifelse(label_start >= 0.5, 1, -1)
+  return (as.data.frame(na.omit(labels)))  # only return non predicted values and as dataframe
+}
+```
+
+
+
+#### Convert the labels to 1 and -1 for both 0/1 and 3/5
+```{r Convert the data to 1 and -1 for both 0/1 and 3/5}
+# rm(train_labels_0_1, train_labels_3_5, train_data_0_1, train_data_3_5)
+train_labels_0_1 = as.data.frame(ifelse(train_labels_0_1 == 1, 1, -1))
+train_labels_3_5 = as.data.frame(ifelse(train_labels_3_5 == 5, 1, -1))
+
+test_labels_0_1 = as.data.frame(ifelse(test_labels_0_1 == 1, 1, -1))
+test_labels_3_5 = as.data.frame(ifelse(test_labels_3_5 == 5, 1, -1))
+```
+
+
+
+#### Shuffle the train data
+```{r select random data for training and prediction from train data}
+# https://stackoverflow.com/questions/42895794/sample-random-column-in-dataframe
+# https://stackoverflow.com/questions/6422273/how-to-randomize-or-permute-a-dataframe-rowwise-and-columnwise
+# df3 <- df1[,sample(ncol(df1))]
+# https://stackoverflow.com/questions/10904124/global-and-local-variables-in-r
+
+shuffle_data_train <- function(n) {
+  train_data_0_1_sample <<- train_data_0_1[, sample(ncol(train_data_0_1), (n/100)*ncol(train_data_0_1), replace = FALSE)]
+train_labels_0_1_sample <<- train_labels_0_1[, sample(ncol(train_labels_0_1), (n/100)*ncol(train_data_0_1), replace = FALSE)]
+
+train_data_3_5_sample <<- train_data_3_5[, sample(ncol(train_data_3_5), (n/100)*ncol(train_data_3_5), replace = FALSE)]
+train_labels_3_5_sample <<- train_labels_3_5[, sample(ncol(train_labels_3_5), (n/100)*ncol(train_data_3_5), replace = FALSE)]
+}
+```
+
+
+#### Function to calculate accuracy. 
+##### This also works for problem 4
+```{r Compute prediction accuracy}
+accuracy <- function(labels, labels_pred) {
+  sum = sum(labels == labels_pred)
+  acc = sum/length(labels)
+  return (acc)
+}
+```
+
+
+#### Data set usage comment
+
+
+#### Run train() and predict() on the 0/1 dataset and calculate accuracy
+```{r Run train() on the 0/1 dataset and calculate accuracy}
+# remove old data
+rm(train_data_0_1_sample, train_labels_0_1_sample)
+# n = 5
+shuffle_data_train(5) # shuffle before each run for 5 percent of data
+
+th1 = train(train_data_0_1_sample, train_labels_0_1_sample, alpha = 0.01)
+pr1 = predict(th1, train_data_0_1_sample)
+```
+
+
+```{r Calculate accuracy 0/1}
+acc_0_1 = accuracy(train_labels_0_1_sample, pr1)
+
+print(paste("The accuracy for 0/1 prediction with 5% of training data is", round(acc_0_1, digits = 2)))
+print(paste("Full result from R is", acc_0_1))
+```
+
+
+#### For 0/1 data set
+
+```{r print 0/1 results}
+print("Result for 0/1 train data: ")
+# head(pr1, 5)
+
+cor1 = which(pr1 == 1)
+print("Position of correct prediction for 1: ")
+head(cor1)
+
+cor0 = which(pr1 == -1)
+print("Position of correct prediction for 0: ")
+head(cor0)
+```
+
+#### Display images for 0/1 data set for prediction
+
+#### Image visualization for 0/1 prediction
+Only 0 image data got picked up
+
+```{r Image visualization for 0/1 prediction}
+# http://stat.ethz.ch/R-manual/R-devel/library/base/html/data.matrix.html
+# get all required matrices
+# 1 is predicted correct at 126 and 617 positions among many
+# 0 is predicted correct at 24 and 493 positions among many
+# we need to read the required data as dataframe as we have converted it to matrix in previus steps. # The chunk is chunk 15 {r Convert the data to 1 and -1 for both 0/1 and 3/5}
+pr_1_a = data.matrix((train_data_0_1)[2], rownames.force = NA) 
+pr_1_b = data.matrix((train_data_0_1)[1], rownames.force = NA)  
+pr_0_a = data.matrix((train_data_0_1)[230], rownames.force = NA) 
+pr_0_b = data.matrix((train_data_0_1)[589], rownames.force = NA)  
+
+# https://www.r-bloggers.com/creating-an-image-of-a-matrix-in-r-using-image/
+# N.ROW = sqrt(nrow(train_data_0_1)) # get number of rows reqired to form 2 D matrix
+# already present from previous work
+
+# from 2 D matrices
+mat_1_a = matrix(pr_1_a, nrow = N.ROW)
+mat_1_b = matrix(pr_1_b, nrow = N.ROW)
+mat_0_a = matrix(pr_0_a, nrow = N.ROW)
+mat_0_b = matrix(pr_0_b, nrow = N.ROW)
+
+image(rotate(mat_1_a)) + title("One")
+image(rotate(mat_1_b)) + title("One")
+image(rotate(mat_0_a)) + title("Zero")
+image(rotate(mat_0_b)) + title("Zero")
+```
+
+
+
+#### Run train() and predict on the 3/5 dataset and calculate accuracy
+```{r Run train() on the 3/5 dataset and calculate accuracy}
+# remove old data
+rm(train_data_3_5_sample, train_labels_3_5_sample)
+# n = 5
+shuffle_data_train(5) # shuffle before each run
+
+th2 = train(train_data_3_5_sample, train_labels_3_5_sample, alpha = 0.01)
+pr2 = predict(th2, train_data_3_5_sample)
+```
+
+
+```{r Calculate accuracy 3/5}
+acc_3_5 = accuracy(train_labels_3_5_sample, pr2)
+
+print(paste("The accuracy for 3/5 prediction with 5% of training data is", round(acc_3_5, digits = 2)))
+print(paste("Full result from R is", acc_3_5))
+```
+
+
+```{r print 3/5 results}
+print("Result for 3/5 train data: ")
+# head(pr2, 5)
+
+cor3 = which(pr2 == 1)
+print("Position of correct prediction for 5: ")
+head(cor3)
+
+cor5 = which(pr2 == -1)
+print("Position of correct prediction for 3: ")
+head(cor5)
+```
+
+
+#### Display images for 3/5 data set after prediction
+
+```{r Image visualization for 3/5 prediction}
+# http://stat.ethz.ch/R-manual/R-devel/library/base/html/data.matrix.html
+# get all required matrices
+# 3 is predicted correct at 246 and 608 positions among many
+# 5 is predicted correct at 191 and 27 positions among many
+# we need to read the required data as dataframe as we have converted it to matrix in previus steps. # The chunk is chunk 15 {r Convert the data to 1 and -1 for both 0/1 and 3/5}
+pr_3_a = data.matrix((train_data_3_5)[246], rownames.force = NA) 
+pr_3_b = data.matrix((train_data_3_5)[608], rownames.force = NA)  
+pr_5_a = data.matrix((train_data_3_5)[191], rownames.force = NA) 
+pr_5_b = data.matrix((train_data_3_5)[27], rownames.force = NA)  
+
+# https://www.r-bloggers.com/creating-an-image-of-a-matrix-in-r-using-image/
+# N.ROW = sqrt(nrow(train_data_3_5)) # get number of rows reqired to form 2 D matrix
+# already present from previous work
+
+# from 2 D matrices
+mat_3_a = matrix(pr_3_a, nrow = N.ROW)
+mat_3_b = matrix(pr_3_b, nrow = N.ROW)
+mat_5_a = matrix(pr_5_a, nrow = N.ROW)
+mat_5_b = matrix(pr_5_b, nrow = N.ROW)
+
+image(rotate(mat_3_a)) + title("Three")
+image(rotate(mat_3_b)) + title("Three")
+image(rotate(mat_5_a)) + title("Five")
+image(rotate(mat_5_b)) + title("Five")
+```
+
+#### 3. Modeling
+
+##### Implement accuracy(labels, labels_pred):
+
+```{r accuracy function from chuck 18 copied again for completion}
+# accuracy <- function(labels, labels_pred) {
+#   sum = sum(labels == labels_pred)
+#   acc = sum/length(labels)
+#   return (acc)
+# }
+```
+
+#### Implement model(train_data, train_labels, test_data, test_labels, alpha)
+
+##### Shuffle test data for test data
+```{r Shuffle test data}
+shuffle_data_test <- function(n) { # n = number of columns to use
+  test_data_0_1_sample <<- test_data_0_1[, sample(ncol(test_data_0_1),        (n/100)*ncol(test_data_0_1), replace = FALSE)]
+  test_labels_0_1_sample <<- test_labels_0_1[, sample(ncol(test_labels_0_1),   (n/100)*ncol(test_data_0_1), replace = FALSE)]
+
+  test_data_3_5_sample <<- test_data_3_5[, sample(ncol(test_data_3_5),        (n/100)*ncol(test_data_3_5), replace = FALSE)]
+  test_labels_3_5_sample <<- test_labels_3_5[, sample(ncol(test_labels_3_5),   (n/100)*ncol(test_data_3_5), replace = FALSE)]
+}
+```
+
+
+#### Model function
+```{r Model function to use on train and test label}
+model <- function(train_data, train_labels, test_data, test_labels, alpha){
+  theta_train = train(train_data, train_labels, alpha) # for training data
+  predict_train = predict(theta_train, train_data) # predict for training data
+  predict_test = predict(theta_train, test_data) # predict for test data
+  train_acc = accuracy(train_labels, predict_train)
+  test_acc = accuracy(test_labels, predict_test)
+  
+  list_model = list(theta_train, train_acc, test_acc)
+}
+```
+
+
+#### Run model function on 0/1 train and test data set
+
+By much trial and error I found that the train function was not converging for alpha greather than 0.04 for 0/1 data set. Therefore I am setting range in between 0.01 to 0.04.
+
+I am using 1 % of 0/1 training and test data set for this work.
+
+#### For 0/1 data set
+```{r Generate 10 alpha for 0/1, results='hide', fig.keep='all'}
+alpha_init = seq(0.01, 0.04, length.out = 10)
+alpha_init
+```
+
+#### Use all 10 alpha for 0/1
+```{r alpha vs accuracy for 0/1, results='hide', fig.keep='all'}
+yy <- NULL
+for (alpha_0_1 in alpha_init) {
+  list_model_0_1_3_runs = NULL
+  acc_train1 = NULL
+  acc_test1 = NULL
+
+  p = 2 # for train data set accuracy
+  q = 3 # for test data set accuracy
+
+  for (number_of_runs in 0:2) {
+    rm(train_data_0_1_sample, train_labels_0_1_sample)
+    rm(test_data_0_1_sample, test_labels_0_1_sample)
+
+    shuffle_data_train(1)
+    shuffle_data_test(1) 
+
+    list_model_0_1 = model(train_data_0_1_sample,
+                           train_labels_0_1_sample,
+                           test_data_0_1_sample,
+                           test_labels_0_1_sample,
+                           alpha = alpha_0_1)
+
+    list_model_0_1_3_runs = c(list_model_0_1_3_runs, list_model_0_1)
+
+    trainacc1 = list_model_0_1_3_runs[[p+3*number_of_runs]]
+    testacc1 = list_model_0_1_3_runs[[q+3*number_of_runs]]
+    acc_train1 = c(acc_train1, trainacc1)
+    acc_test1 = c(acc_test1, testacc1)
+  }
+  yy <- rbind(yy, cbind(alpha_0_1, acc_train1, acc_test1))
+  
+  acc_train1
+  acc_test1
+}
+df_0_1_accuracy = data.frame(yy)
+```
+
+#### Create graph for 0/1
+```{r alpha and accuracy for 0/1}
+p1 <- ggplot(df_0_1_accuracy, aes(alpha_0_1)) +
+      geom_line(aes(y = acc_train1, color = "acc_train1")) +
+      geom_line(aes(y = acc_test1, color = "acc_test1")) +
+      xlab("Alpha") +
+      ylab("Accuracy")
+
+p1
+```
+
+#### Best test result for 0/1 data set
+```{r Compile results for 0/1 run}
+print(paste("Best accuracy for 0/1 test data set = ", max(df_0_1_accuracy$acc_test1)))
+```
+
+
+#### For 3/5 data set
+```{r Generate 10 alpha between 0.01 to 0.04 for 3/5, results='hide', fig.keep='all'}
+alpha_pred = seq(0.01, 0.04, length.out = 10, results='hide', fig.keep='all')
+alpha_pred
+```
+
+#### Use all 10 alpha for 3/5
+```{r alpha vs accuracy for 3/5, results='hide', fig.keep='all'}
+xx <- NULL
+for (alpha1 in alpha_pred) {
+  list_model_3_5_3_runs = NULL
+  acc_train2 = NULL
+  acc_test2 = NULL
+
+  p = 2 # for train data set accuracy
+  q = 3 # for test data set accuracy
+
+  for (number_of_runs in 0:2) {
+    rm(train_data_3_5_sample, train_labels_3_5_sample)
+    rm(test_data_3_5_sample, test_labels_3_5_sample)
+
+    data_percent = 1
+    shuffle_data_train(data_percent)
+    shuffle_data_test(data_percent) # use all test data
+
+    list_model_3_5 = model(train_data_3_5_sample,
+                           train_labels_3_5_sample,
+                           test_data_3_5_sample,
+                           test_labels_3_5_sample,
+                           alpha = alpha1)
+
+    list_model_3_5_3_runs = c(list_model_3_5_3_runs, list_model_3_5)
+
+    trainacc2 = list_model_3_5_3_runs[[p+3*number_of_runs]]
+    testacc2 = list_model_3_5_3_runs[[q+3*number_of_runs]]
+    acc_train2 = c(acc_train2, trainacc2)
+    acc_test2 = c(acc_test2, testacc2)
+  }
+  xx <- rbind(xx, cbind(alpha1, acc_train2, acc_test2))
+
+  acc_train2
+  acc_test2
+}
+df_3_5_accuracy = data.frame(xx)
+```
+
+
+#### Create graph for 3/5
+```{r alpha and accuracy for 3/5}
+p2 <- ggplot(df_3_5_accuracy, aes(alpha1)) +
+      geom_line(aes(y = acc_train2, color = "acc_train2")) +
+      geom_line(aes(y = acc_test2, color = "acc_test2")) +
+      xlab("Alpha") +
+      ylab("Accuracy")
+
+p2
+```
+
+
+#### Best result for 3/5 test data set
+```{r Compile results for 3/5 run}
+print(paste("Best accuracy for 3/5 data set = ", max(df_3_5_accuracy$acc_test2)))
+```
+
+
+#### 5. Learning Curves
+
+#### For 0/1 data set
+
+#### Data size vs. accuracy for 0/1 samples
+```{r Generate 10 data size for 0/1, results='hide', fig.keep='all'}
+data_size_0_1 = seq(1, 2, length.out = 10)
+data_size_0_1
+```
+
+
+Keeping alpha as 0.04
+```{r data size vs accuracy for 0/1, results='hide', fig.keep='all'}
+yy <- NULL
+for (data_size in data_size_0_1) {
+  list_model_0_1_3_runs = NULL
+  acc_train1 = NULL
+  acc_test1 = NULL
+
+  p = 2 # for train data set accuracy
+  q = 3 # for test data set accuracy
+
+  for (number_of_runs in 0:2) {
+    rm(train_data_0_1_sample, train_labels_0_1_sample)
+    rm(test_data_0_1_sample, test_labels_0_1_sample)
+
+    shuffle_data_train(data_size)
+    shuffle_data_test(data_size)
+
+    list_model_0_1 = model(train_data_0_1_sample,
+                           train_labels_0_1_sample,
+                           test_data_0_1_sample,
+                           test_labels_0_1_sample,
+                           alpha = 0.04)
+
+    list_model_0_1_3_runs = c(list_model_0_1_3_runs, list_model_0_1)
+
+    trainacc1 = list_model_0_1_3_runs[[p+3*number_of_runs]]
+    testacc1 = list_model_0_1_3_runs[[q+3*number_of_runs]]
+    acc_train1 = c(acc_train1, trainacc1)
+    acc_test1 = c(acc_test1, testacc1)
+  }
+  yy <- rbind(yy, cbind(data_size, acc_train1, acc_test1))
+
+  acc_train1
+  acc_test1
+}
+df_0_1_size_accuracy = data.frame(yy)
+```
+
+#### Create graph for 0/1 data size
+```{r data size and accuracy for 0/1}
+p3 <- ggplot(df_0_1_size_accuracy, aes(data_size)) +
+      geom_line(aes(y = acc_train1, color = "acc_train1")) +
+      geom_line(aes(y = acc_test1, color = "acc_test1")) +
+      xlab("Data size in percentage of data used") +
+      ylab("Accuracy")
+
+p3
+```
+
+
+#### Data size vs. accuracy for 3/5 samples
+```{r Generate 10 data size for 3/5, results='hide', fig.keep='all'}
+data_size_3_5 = seq(1, 2, length.out = 10)
+data_size_3_5
+```
+
+
+Keeping alpha as 0.04
+```{r data size vs accuracy for 3/5, results='hide', fig.keep='all'}
+zz <- NULL
+for (data_size in data_size_3_5) {
+  list_model_3_5_3_runs = NULL
+  acc_train2 = NULL
+  acc_test2 = NULL
+
+  p = 2 # for train data set accuracy
+  q = 3 # for test data set accuracy
+
+  for (number_of_runs in 0:2) {
+    rm(train_data_3_5_sample, train_labels_3_5_sample)
+    rm(test_data_3_5_sample, test_labels_3_5_sample)
+
+    shuffle_data_train(data_size)
+    shuffle_data_test(data_size)
+
+    list_model_3_5 = model(train_data_3_5_sample,
+                           train_labels_3_5_sample,
+                           test_data_3_5_sample,
+                           test_labels_3_5_sample,
+                           alpha = 0.04)
+
+    list_model_3_5_3_runs = c(list_model_3_5_3_runs, list_model_3_5)
+
+    trainacc2 = list_model_3_5_3_runs[[p+3*number_of_runs]]
+    testacc2 = list_model_3_5_3_runs[[q+3*number_of_runs]]
+    acc_train2 = c(acc_train2, trainacc2)
+    acc_test2 = c(acc_test2, testacc2)
+  }
+  zz <- rbind(zz, cbind(data_size, acc_train2, acc_test2))
+
+  acc_train2
+  acc_test2
+}
+df_3_5_size_accuracy = data.frame(zz)
+```
+
+#### Create graph for 3/5 data set
+```{r data size and accuracy for 3/5}
+p4 <- ggplot(df_3_5_size_accuracy, aes(data_size)) +
+      geom_line(aes(y = acc_train2, color = "acc_train2")) +
+      geom_line(aes(y = acc_test2, color = "acc_test2")) +
+      xlab("Data size in percentage of data used") +
+      ylab("Accuracy")
+
+p4
+```

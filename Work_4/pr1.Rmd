@@ -1,0 +1,622 @@
+---
+output:
+ html_document:
+    fig_width: 5
+    fig_height: 2.9
+    fig.align: "center"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message=FALSE, 
+                      warning=FALSE, results='hide', fig.keep='all', 
+                      cache = TRUE, autodep = TRUE)
+# echo = TRUE print the R code
+```
+
+# Data
+
+
+# Objective
+
+
+
+# Setup
+
+## Load data
+
+Make sure you've downloaded the [`movies_merged`](https://s3.amazonaws.com/content.udacity-data.com/courses/gt-cs6242/project/movies_merged) file and it is in the current working directory. Now load it into memory:
+
+```{r}
+setwd("/Users//Desktop//PR1")
+load('movies_merged')
+cat("Dataset has", dim(movies_merged)[1], "rows and", dim(movies_merged)[2], "columns", end="\n", file="")
+```
+
+This creates an object of the same name (`movies_merged`). For convenience, you can copy it to `df` and start using it:
+
+```{r}
+df = movies_merged
+cat("Column names:", end="\n", file="")
+colnames(df)
+```
+
+## Load R packages
+
+
+```{r}
+install.packages("reshape")
+install.packages("reshape2")
+install.packages("plyr")
+install.packages("tm")
+```
+
+
+```{r}
+library(ggplot2)
+library(GGally)
+library(reshape)
+library(reshape2)
+library(plyr)
+```
+
+**Non-standard packages used**: 
+```{r}
+# used the below for multiplot
+# http://www.peterhaschke.com/r/2013/04/24/MultiPlot.html
+source("http://peterhaschke.com/Code/multiplot.R")
+
+# for tm package
+# install tm package
+# install.packages("tm")
+library(tm)
+
+# install stringr package
+# install.packages("stringr")
+library(stringr)
+```
+
+# Tasks
+
+## 1. Remove non-movie rows
+
+
+```{r}
+df <- df[df$Type == "movie",]
+dim(df)
+```
+
+**Q**: How many rows are left after removal? 
+
+**A**: 40000
+
+## 2. Process `Runtime` column
+
+
+```{r}
+
+# replace anything that is hard coded as "N/A" by 0
+df$Runtime[df$Runtime=="N/A"] = 0
+
+# replace anything that is NA by 0
+df$Runtime[is.na(df$Runtime)] = 0
+
+# split into different parts of the string
+df1 = strsplit(df$Runtime, " ", perl = TRUE)
+
+for (i in 1:length(df1)) {
+  # handle when there is no unit on second position i.e just the number
+  if (is.na(df1[[i]][2])) {
+    df$Runtime[i] = as.numeric(df1[[i]][1])
+  } 
+  # for h only, check the first part to be h and the 4th part to be NA
+  else if (((df1[[i]][2] == "h") & (is.na(df1[[i]][4])))){
+    df$Runtime[i] = (60*as.numeric(df1[[i]][1]))
+  }
+  # handle when there is h and min
+  else if ((df1[[i]][2] == "h") & (df1[[i]][4] == "min")){
+    df$Runtime[i] = ((60*as.numeric(df1[[i]][1])) + (as.numeric(df1[[i]][3])))
+  }
+  # handle when there is only min
+  else if (df1[[i]][2] == "min") {
+    df$Runtime[i] = (as.numeric(df1[[i]][1]))
+  }
+  else {
+    # ignore
+  }
+  # convert all to numeric one last time
+  df$Runtime = as.numeric(df$Runtime)
+}
+```
+
+
+```{r, warning=FALSE, message=FALSE, fig.retina = 1}
+
+# create plots
+# scatter plot
+ggplot(df, aes(Year, Runtime)) + geom_point() + 
+  theme(axis.text.x =
+          element_text(size  = 9,
+                       hjust = 1)) +
+  scale_alpha_continuous(breaks = seq(1850, 2050, by=10)) +
+  ggtitle("Figure 1") +
+  xlab("Year") + 
+  ylab("Total movie run time in a year [min]")
+```
+
+
+```{r, warning=FALSE, message=FALSE, fig.retina = 1}
+# create histogram of the run time
+ggplot(df, aes(Runtime)) + geom_histogram() + xlab("Total run time in a year [min]") +
+  xlim(c(0,200)) + ggtitle("Figure 2")
+
+#after few testing set the max limit to 200 for histogram
+```
+
+
+```{r, warning=FALSE, message=FALSE, fig.retina = 1}
+# Total Runtime vs. year
+df2 = aggregate(Runtime ~ Year, df, sum)
+
+ggplot(df2, aes(Year, Runtime)) + 
+  geom_point() + 
+  theme(axis.text.x =
+          element_text(size  = 9,
+                       angle = 90,
+                       hjust = 1)) +
+  scale_x_continuous(breaks = seq(1850, 2017, by=10)) + ggtitle("Figure 3") +
+  xlab("Year") + 
+  ylab("Total movie run time in a year [min]")
+```
+
+
+```{r, warning=FALSE, message=FALSE, fig.retina = 1}
+# Runtime vs. budget
+
+# scatter plot
+ggplot(df, aes(Runtime, Budget))+ geom_point() + 
+  theme(axis.text.x =
+          element_text(size  = 9,
+                       hjust = 1)) +
+  ggtitle("Figure 4") + xlim(0,350) +
+  xlab("Runtime [min]") + ylab("Budget")
+```
+
+
+```{r}
+
+# replace all "N/A" with NA on Genre
+df$Genre[df$Genre=="N/A"] = NA
+
+# replace ", " with " "
+df$Genre = gsub(", ", " ", df$Genre)
+# https://piazza.com/class/j6gt7ycx6nk145?cid=542
+# replace "-" with ""
+df$Genre = gsub("-", "", df$Genre)
+# convert genre column to binary
+genre_corp = Corpus(VectorSource(df$Genre))
+genre_dtm = DocumentTermMatrix(genre_corp)
+df = data.frame(df, as.matrix(genre_dtm))
+# delete genre column
+df = subset(df, select = -Genre)
+```
+
+Plot the relative proportions of movies having the top 10 most common genres.
+
+```{r}
+
+#sum the values in each genre column and sort in decreasing order
+# after visual inspection of data frame found that the new genre columns spans from coumn 39 to 68
+df_genre_col_sum = sort(colSums(df[,39:66]), decreasing = T)[1:10]
+
+list = names(df_genre_col_sum)
+# print (list) 
+
+df_genre_888 = df[list]
+
+df_99999 = colSums(Filter(is.numeric, df_genre_888))
+
+df_99999 = data.frame(df_99999)
+
+df_99999 = data.frame("Genre" = list, "Sum" = df_99999[,1])
+
+df_99999 = data.frame(df_99999, "Relative" = df_99999[,2]/sum(df_99999$Sum))
+
+ggplot(df_99999, aes(Genre, Relative)) + geom_bar(stat = "identity") + 
+  theme(axis.text.x =
+          element_text(size  = 9,
+                       angle = 90,
+                       hjust = 1)) +
+  xlab("Genre") + 
+  ylab("Relative proportions") +
+   ggtitle("Figure 5")
+```
+
+
+```{r, warning=FALSE, message=FALSE, fig.retina = 1}
+
+# select the required column in new dataframe
+df_genre_10 = df[,c("Runtime", list)]
+# get the totla of run time for each genre
+# length(list)
+vec_sum = c()
+vec_genre = c()
+
+# dim(df_genre_10) # 11 col but the genre names are in 2 to 11
+for (i in 2:11) {
+  vec_genre = c(vec_genre, list[i-1])
+  vec_sum1 = sum(df_genre_10[df_genre_10[c(i)] == 1,]$Runtime)
+  vec_sum = c(vec_sum, vec_sum1)
+}
+
+df_genre_total_runtime = data.frame("Runtime" = vec_sum, "Genre" = vec_genre)
+
+ggplot(df_genre_total_runtime, aes(Genre, Runtime)) + geom_bar(stat = "identity") + 
+  theme(axis.text.x =
+          element_text(size  = 9,
+                       angle = 90,
+                       hjust = 1)) +
+  xlab("Genre") + 
+  ylab("Total movie run time for the genre [min]") +
+   ggtitle("Figure 6") 
+```
+
+
+```{r, warning=FALSE, message=FALSE, fig.retina = 1}
+# subset the dataframe by each genre type and plot as bx plot then combine all box plot into one 
+drama = ggplot(subset(df_genre_10, drama ==1), aes(drama, Runtime)) + geom_boxplot()
+comedy = ggplot(subset(df_genre_10, comedy ==1), aes(comedy, Runtime)) + geom_boxplot()
+short = ggplot(subset(df_genre_10, short ==1), aes(short, Runtime)) + geom_boxplot()
+romance = ggplot(subset(df_genre_10, romance ==1), aes(romance, Runtime)) + geom_boxplot()
+action = ggplot(subset(df_genre_10, action ==1), aes(action, Runtime)) + geom_boxplot()
+crime = ggplot(subset(df_genre_10, crime ==1), aes(crime, Runtime)) + geom_boxplot()
+thriller = ggplot(subset(df_genre_10, thriller ==1), aes(thriller, Runtime)) + geom_boxplot()
+documentary = ggplot(subset(df_genre_10, documentary ==1), aes(documentary, Runtime)) + geom_boxplot()
+adventure = ggplot(subset(df_genre_10, adventure ==1), aes(adventure, Runtime)) + geom_boxplot()
+animation = ggplot(subset(df_genre_10, animation ==1), aes(animation, Runtime)) + geom_boxplot()
+
+# need to run below code as per
+# http://www.peterhaschke.com/r/2013/04/24/MultiPlot.html
+source("http://peterhaschke.com/Code/multiplot.R")
+
+multiplot(drama, comedy, short, romance, action, crime, thriller, documentary, adventure, animation, cols=5) 
+```
+
+```{r}
+
+# subset data frame that contains only Year, Date, Released and Gross
+
+#check NA in all columns
+sum(is.na(df$Year)) # 0
+sum(is.na(df$Date)) # 35442 If we use date to remove we will end up removing almost all data
+sum(is.na(df$Released)) # 4949
+sum(is.na(df$Gross)) # 35442
+# extract year from released year
+out = strsplit(as.character(df$Released), '-')
+# add to data frame
+df = data.frame(df, do.call(rbind, out))
+names(df)[names(df) == 'X1'] = 'Release_Year'
+names(df)[names(df) == 'X2'] = 'Release_Month'
+names(df)[names(df) == 'X3'] = 'Release_Day'
+# typeof(df$Year[1])
+# typeof(df$Release_Year[1])
+# Release year has 4949 NA, convert them all to the date from the Year column
+df$Release_Year[is.na(df$Release_Year)] = df$Year
+# count number of rows that match on year and release_year column
+# count = df[df$Year == df$Release_Year,] # 29376 rows are equal and gives a new data frame count with 29376 rows
+count = df$Year == df$Release_Year # logical vector TRUE if equal and FALSE if not equal
+# sum(count) # 29367
+count = ifelse(!is.na(df$Gross), TRUE, count) # if the gross has NA return TRUE so as to not remove all NA gross rows
+# sum(count)
+df = df[count, ]
+```
+
+
+## 5. Explore `Gross` revenue
+
+```{r, warning=FALSE, message=FALSE, fig.retina = 1}
+
+# rm(df_genre_col_sum, list_2, df_genre_all, vec_sum_2, vec_genre_2, vec_sum1, df_genre_col_sum_2)
+df_genre_col_sum_2 = sort(colSums(df[,39:66]), decreasing = T)
+
+list_2 = names(df_genre_col_sum_2)
+# print (list_2) 
+
+# select the required column in new dataframe
+df_genre_all = df[,c("Gross", list_2)]
+vec_sum_2 = c()
+vec_genre_2 = c()
+#genre is listed under col 2 to 29
+for (i in 2:29) {
+  vec_genre_2 = c(vec_genre_2, list_2[i-1])
+  vec_sum1 = sum(df_genre_all[df_genre_all[c(i)] == 1,]$Gross, na.rm = T)
+  vec_sum_2 = c(vec_sum_2, vec_sum1)
+}
+
+df_genre_total_gross = data.frame("Gross" = vec_sum_2, "Genre" = vec_genre_2)
+
+ggplot(df_genre_total_gross, aes(Genre, Gross)) + geom_bar(stat = "identity") + 
+  theme(axis.text.x =
+          element_text(size  = 9,
+                       angle = 90,
+                       hjust = 1)) +
+  xlab("Genre") + 
+  ylab("Gross Revenue") + 
+  ggtitle("Figure 7") 
+```
+
+
+```{r, warning=FALSE, message=FALSE, fig.retina = 1}
+# gross rev vs budget
+ggplot(df, aes(Budget, Gross)) + geom_point() + 
+  theme(axis.text.x =
+          element_text(size  = ,
+                       hjust = 1)) +
+  xlab("Budget") + ylab("Gross Revenue") +  
+  ggtitle("Figure 8") 
+```
+
+
+```{r, warning=FALSE, message=FALSE, fig.retina = 1}
+# gross rev vs run time
+ggplot(df, aes(Runtime, Gross)) + geom_point() + 
+  theme(axis.text.x =
+          element_text(size  = 9,
+                       hjust = 1)) +
+  xlim(c(0,350)) +
+  xlab("Runtime [min]") + ylab("Gross Revenue") +  
+  ggtitle("Figure 9") 
+```
+
+
+```{r, warning=FALSE, message=FALSE, fig.retina = 1}
+
+# only select Gross and Month column as its easier to use
+# https://stackoverflow.com/questions/1660124/how-to-sum-a-variable-by-group
+
+vec_month = c("Jan", "Feb", "Mar",
+              "Apr", "May", "June", "July",
+              "Aug", "Sep", "Oct", "Nov", "Dec")
+
+# find sum of gross for all months
+df1 = aggregate(Gross ~ Release_Month, df, sum)
+# add name of months to the dataframe
+df1 = data.frame(df1, "Month" = vec_month)
+# order so that months are in order not in alphabetical order
+df1$Month = factor(df1$Month, order = T, levels= vec_month)
+
+ggplot(df1, aes(Month, Gross)) + geom_bar(stat = "identity") + 
+  theme(axis.text.x =
+          element_text(size  = 9,
+                       angle = 90,
+                       hjust = 1)) +
+  xlab("Month") + 
+  ylab("Gross Revenue") + ggtitle("Figure 10") 
+```
+
+
+```{r}
+
+# replace NA by 0
+df$Awards[is.na(df$Awards)] = 0
+# replace hard coded N/A by 0
+df$Awards[df$Awards=="N/A"] = 0
+
+# rm(vec_win, vec_nom)
+vec_win = c()
+vec_nom = c()
+
+for (i in 1:dim(df)[1]) {
+  string = df$Awards[i]
+  string = gsub("[.]","",string) # remove the dot [.]
+  string = as.list(strsplit(string, ' ')[[1]]) # split the string 
+    if (length(string)==2) { # case of 1 win or 1 nomination
+      if(string[2] == "win" || string[2] == "wins") {
+        vec_win = c(vec_win, as.numeric(string[1])) 
+        vec_nom = c(vec_nom, 0) # when you assign win you also need to assign nom
+      } else if(string[2] == "nomination" || string[2] == "nominations") {
+        vec_nom = c(vec_nom, as.numeric(string[1]))
+        vec_win = c(vec_win, 0)
+      } else { #
+        vec_win = c(vec_win, 0)
+        vec_nom = c(vec_nom, 0)
+      }
+    } 
+    else if (length(string)==5) { # 1 win $ 5 nominations
+      if(string[2] == "win" || string[2] == "wins") {
+        vec_win = c(vec_win, as.numeric(string[1]))
+        vec_nom = c(vec_nom, 0)
+      } else if(string[5] == "nomination" || string[5] == "nominations") {
+        vec_nom = c(vec_nom, as.numeric(string[4]))
+        #vec_win = c(vec_win, 0)
+      } else { #
+        vec_win = c(vec_win, 0)
+        vec_nom = c(vec_nom, 0)
+      }
+    }
+    else { # ignore these "Nominated for 1 Oscar. Another 13 wins & 15 nominations.""
+      vec_win = c(vec_win, 0)
+      vec_nom = c(vec_nom, 0)
+    }
+}
+# Add win and Nominations columns
+
+df = data.frame(df, "Win" = vec_win, "Nomination" = vec_nom)
+```
+
+
+```{r}
+sum(!df$Awards==0)
+# 11491
+```
+
+
+```{r, warning=FALSE, message=FALSE, fig.retina = 1}
+
+ggplot(df, aes(Win, Gross)) + geom_point() + 
+  theme(axis.text.x =
+          element_text(size  = 9,
+                       angle = 90,
+                       hjust = 1)) +
+  xlab("Win") + 
+  ylab("Gross Revenue") + ggtitle("Figure 11") 
+```
+
+
+```{r, warning=FALSE, message=FALSE, fig.retina = 1}
+# df6 = aggregate(Gross ~ Win, df, sum)
+# remove 0 win data
+ggplot(aggregate(Gross ~ Win, df, sum), aes(Win, Gross)) + geom_point() + 
+  theme(axis.text.x =
+          element_text(size  = 9,
+                       angle = 90,
+                       hjust = 1)) +
+  xlab("Win") + xlim(1,42) +
+  ylab("Gross Revenue") + ggtitle("Figure 12")
+```
+
+
+```{r, warning=FALSE, message=FALSE, fig.retina = 1}
+ggplot(df, aes(Nomination, Gross)) + geom_point() + 
+  theme(axis.text.x =
+          element_text(size  = 9,
+                       angle = 90,
+                       hjust = 1)) +
+  xlab("Nomination") + 
+  ylab("Gross Revenue") + ggtitle("Figure 13")
+```
+
+
+```{r, warning=FALSE, message=FALSE, fig.retina = 1}
+# df7 = aggregate(Gross ~ Nomination, df, sum)
+# did not consider with 0 nom
+ggplot(aggregate(Gross ~ Nomination, df, sum), aes(Nomination, Gross)) + geom_point() + 
+  theme(axis.text.x =
+          element_text(size  = 9,
+                       angle = 90,
+                       hjust = 1)) +
+  xlab("Nomination") + xlim(1,16) + ylim (0, 10000000000) +
+  ylab("Gross Revenue") + ggtitle("Figure 14")
+```
+
+
+
+## 7. Movie ratings from IMDb and Rotten Tomatoes
+
+
+```{r, warning=FALSE, message = FALSE, fig.retina=1}
+
+# colnames(df)
+# with meta data column, required to change cardinality_threshold to 98
+#ggpairs(df, columns = c(14, 15, 16, 19, 21, 22, 23, 24, 26, 27, 28), cardinality_threshold = 98) + ggtitle("Figure 14: with metadata") 
+
+#w/o meta data
+#ggpairs(df, columns = c(15, 16, 19, 21, 22, 23, 24, 26, 27, 28)) + ggtitle("Figure 15: w/o metadata") 
+
+```
+
+
+```{r}
+# cor among imdb and tomato user ratings
+ggpairs(df, columns = c(15, 16, 26, 27, 28)) + ggtitle("Fig 14: cor among imdbRating, imdbVotes, tomatoMeterUser, tomatoUserRating and tomatoUserReviews") +
+   ggtitle("Figure 15")
+```
+
+
+```{r}
+# cor among Gross, imdbRating and imdbVotes
+ggpairs(df, columns = c(37, 15, 16)) +  ggtitle("Figure 16: cor among Gross, imdbRating and imdbVotes")
+```
+
+
+```{r}
+# cor among various tomato ratings
+ggpairs(df, columns = c(19, 21, 22)) + ggtitle("Fig 17: cor among tomatoMeter, tomatoRating and tomatoReviews")
+```
+
+
+```{r}
+# cor among various tomato ratings and gross
+ggpairs(df, columns = c(37, 19, 21, 22)) + ggtitle("Fig 18: cor among Gross, tomatoMeter, tomatoRating and tomatoReviews")
+```
+
+
+```{r}
+# cor among tomato user rating
+ggpairs(df, columns = c(26, 27, 28)) + ggtitle("Fig 19: cor among tomatoMeterUser, tomatoUserRating and tomatoUserReviews")
+```
+
+
+```{r}
+# cor among tomato user rating and Gross
+ggpairs(df, columns = c(37, 26, 27, 28)) + ggtitle("Fig 20: cor among Gross, tomatoMeterUser, tomatoUserRating and tomatoUserReviews")
+```
+
+
+## 8. Ratings and awards
+
+```{r}
+
+# take three rating; imdbRating, tomatoRatings and tomatoUserRating
+ggpairs(df, columns = c(70, 15, 21, 27)) + ggtitle("Fig 21: Cor among award win, imdbRating, tomatoRating and tomatoUserRating")
+```
+
+
+```{r}
+ggpairs(df, columns = c(71, 15, 21, 27)) + ggtitle("Fig 22: Cor among award nominations, imdbRating, tomatoRating and tomatoUserRating")
+```
+
+
+## 9. Expected insights
+
+
+```{r}
+df_rating = df[,c("Rated", "Gross", "Budget")]
+# replace anything that is hard coded as "N/A" or UNRATED or NOT RATED by NA
+df_rating$Rated[df_rating$Rated=="N/A"] = NA
+df_rating$Rated[tolower(df_rating$Rated)=="unrated"] = NA
+df_rating$Rated[tolower(df$Rated)=="not rated"] = NA
+df_rating$Rated[tolower(df$Rated)=="passed"] = NA
+df_rating$Rated[tolower(df$Rated)=="approved"] = NA
+
+df_rr = df_rating[complete.cases(df_rating[, "Rated"]),]
+
+df_r1 = aggregate(. ~ Rated, df_rr, sum)
+
+melted = melt(df_r1, id.vars="Rated")
+```
+
+
+```{r}
+
+df_r2 = count(df_rr, "Rated")
+
+ggplot(df_r2, aes(Rated, freq)) + geom_point() + 
+  theme(axis.text.x =
+          element_text(size  = 9,
+                       angle = 90,
+                       hjust = 1)) +
+  xlab("Movie rating") + 
+  ylab("Frequency") +
+   ggtitle("Figure 23")
+```
+
+
+```{r}
+ggplot() + geom_line(data=melted, aes(x=Rated, y=value, group=variable, colour=variable)) +
+   ggtitle("Figure 24")
+```
+
+```{r}
+ggpairs(df, columns = c(36, 37)) + ggtitle("Cor between gross and domestic gross") +
+   ggtitle("Figure 25")
+```
+
+
+## 10. Unexpected insight
+
+```{r}
+
+ggpairs(df, columns = c(35, 15, 21, 27)) + ggtitle("Fig 26: Cor among movie budget, imdbRating, tomatoRating and tomatoUserRating")
+```
+
+

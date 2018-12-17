@@ -1,0 +1,423 @@
+---
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message=FALSE, 
+                      warning=FALSE, results='hide', fig.keep='all', 
+                      cache = TRUE, autodep = TRUE)
+# echo = TRUE print the R code
+```
+
+```{r}
+# install.packages("GGally")
+```
+
+```{r}
+setwd("....")
+library(ggplot2)
+library(GGally)
+data(midwest)
+```
+
+
+# 1. Professional Education by State
+
+Visualize the percentage of people that have a professional education (percprof column) for each county, grouped by state, using a suitable type of plot that can help show the properties of the distribution of percprof values found within each state.
+
+# for Illinois - bar graph
+```{r}
+illinois.bar = ggplot(data=subset(midwest, state == "IL"), aes(x=county, y=percprof, fill = county)) +
+  geom_bar(colour="black", stat="identity") +
+  theme(axis.text.x =
+          element_text(size  = 6,
+                       angle = 90,
+                       hjust = 1,
+                       vjust = 1)) +
+  guides(fill=FALSE) +
+  xlab("Counties, IL") + ylab("Percentage of people that have professional education (percprof)") +
+  ggtitle("Percentage of people that have professional education in different counties in Illinois")
+
+plot(illinois.bar)
+```
+
+for Illinois - line graph bar graph looks for nicer and professional here so we will continue bar graph for all other states
+
+```{r}
+illinois.line = ggplot(data=subset(midwest, state == "IL"), aes(x=county, y=percprof, color = county)) +
+  geom_line() +
+  geom_point() +
+  theme(axis.text.x =
+          element_text(size  = 6,
+                       angle = 90,
+                       hjust = 1,
+                       vjust = 1), legend.position="none") +
+  guides(fill=FALSE) +
+  xlab("Counties, IL") + ylab("Percentage of people that have professional education (percprof)") +
+  ggtitle("Percentage of people that have professional education in different counties in Illinois")
+
+plot(illinois.line)
+```
+
+# for Indiana - bar graph
+```{r}
+indiana.bar = ggplot(data=subset(midwest, state == "IN"), aes(x=county, y=percprof, fill = county)) +
+  geom_bar(colour="black", stat="identity") +
+  theme(axis.text.x =
+          element_text(size  = 6,
+                       angle = 90,
+                       hjust = 1,
+                       vjust = 1)) +
+  guides(fill=FALSE) +
+  xlab("Counties, IN") + ylab("Percentage of people that have professional education (percprof)") +
+  ggtitle("Percentage of people that have professional education in different counties in Indiana")
+```
+
+# for Michigan - bar graph
+```{r}
+michigan.bar = ggplot(data=subset(midwest, state == "MI"), aes(x=county, y=percprof, fill = county)) +
+  geom_bar(colour="black", stat="identity") +
+  theme(axis.text.x =
+          element_text(size  = 6,
+                       angle = 90,
+                       hjust = 1,
+                       vjust = 1)) +
+  guides(fill=FALSE) +
+  xlab("Counties, MI") + ylab("Percentage of people that have professional education (percprof)") +
+  ggtitle("Percentage of people that have professional education in different counties in Michigan")
+
+plot(michigan.bar)
+```
+
+# for Ohio - bar graph
+```{r}
+ohio.bar = ggplot(data=subset(midwest, state == "OH"), aes(x=county, y=percprof, fill = county)) +
+  geom_bar(colour="black", stat="identity") +
+  theme(axis.text.x =
+          element_text(size  = 6,
+                       angle = 90,
+                       hjust = 1,
+                       vjust = 1)) +
+  guides(fill=FALSE) +
+  xlab("Counties, OH") + ylab("Percentage of people that have professional education (percprof)") +
+  ggtitle("Percentage of people that have professional education in different counties in Ohio")
+
+plot(michigan.bar)
+```
+
+# for Wisconsin - bar graph
+```{r}
+wisconsin.bar = ggplot(data=subset(midwest, state == "WI"), aes(x=county, y=percprof, fill = county)) +
+  geom_bar(colour="black", stat="identity") +
+  theme(axis.text.x =
+          element_text(size  = 6,
+                       angle = 90,
+                       hjust = 1,
+                       vjust = 1)) +
+  guides(fill=FALSE) +
+  xlab("Counties, WI") + ylab("Percentage of people that have professional education (percprof)") +
+  ggtitle("Percentage of people that have professional education in different counties in Wisconsin")
+
+plot(wisconsin.bar)
+```
+
+
+Describe the distributions by pointing out at least 2 relevant and interesting properties that your plot illustrates, such as the mean or median value for some states, the spread of values for some states, states that have outlying counties, and so on.
+
+```{r}
+summary(subset(midwest, state == "IL")$percprof)
+summary(subset(midwest, state == "IN")$percprof)
+summary(subset(midwest, state == "MI")$percprof)
+summary(subset(midwest, state == "OH")$percprof)
+summary(subset(midwest, state == "WI")$percprof)
+```
+
+
+Can you point out which state has the lowest and highest percentage of population with a professional education? If not, explain why. You may interpret this in one of two ways: A) compute a summary statistic for each state (e.g. combined mean) and compare that across states; or, B) directly compare the percprof distributions across states. Support your claim with additional statistics/graph(s) here, if necessary.
+
+```{r}
+states = c(unique(midwest$state)) # returns vector of state
+
+prof_edu = numeric() # empty vector to hold the prof education for each state
+```
+
+
+returns the percentage of population with professional education for each state using the adult population as basis as adult populations are the ones likely to have professional education
+
+```{r}
+prof_edu_func = function(n){
+  return (sum(subset(midwest, state == states[n])$percprof * subset(midwest, state == states[n])$popadults)/
+            (sum(subset(midwest, state == states[n])$popadults)))
+}
+
+for (i in 1:length(states)) {
+  prof_edu = c(prof_edu, prof_edu_func(i))
+}
+```
+
+
+# professional education for each state
+```{r}
+df_prof_edu_state = data.frame("state" = states, "prof_education_state" = prof_edu)
+
+# https://stackoverflow.com/questions/42164965/return-the-value-from-one-column-based-on-the-max-value-in-another-column
+max_state = df_prof_edu_state$state[which.max(df_prof_edu_state$prof_education_state)]
+# max_state IL
+min_state = df_prof_edu_state$state[which.min(df_prof_edu_state$prof_education_state)]
+# min_state WI
+```
+
+
+# 2. School and College Education by State [20 points]
+
+Using the midwest dataset: Explore the three-way relationship between the percentage of people with a high school diploma in each county (perchsd), the percentage of college educated population in each county (percollege), and the state. Illustrate these relationships using 3 separate plots (perchsd vs. state, percollege vs. state, perchsd vs. percollege), or a combined pair-wise plot (e.g. using ggpairs).
+
+# perchsd vs. state
+```{r}
+bar1 = ggplot(data=subset(midwest), aes(x=state, y=perchsd, fill = state)) +
+  geom_bar(colour="black", stat="identity") +
+  xlab("State") + ylab("Percentage of people with a high school diploma in each county (perchsd))") +
+  ggtitle("Percentage of people with a high school diploma in each state")
+
+plot(bar1)
+```
+
+# percollege vs. state
+```{r}
+bar2 = ggplot(data=subset(midwest), aes(x=state, y=percollege, fill = state)) +
+  geom_bar(colour="black", stat="identity") +
+  xlab("State") + ylab("Percentage of college educated population in each county (percollege))") +
+  ggtitle("Percentage of college educated population in each state")
+
+plot(bar2)
+```
+
+# perchsd vs. percollege
+
+```{r}
+bar3 = ggplot(data=subset(midwest), aes(x=perchsd, y=percollege, fill = state)) +
+  geom_bar(colour="black", stat="identity") +
+  xlab("perchsd") + ylab("percollege") +
+  ggtitle("Percentage of people with a college degree vs. high schoool degree")
+
+plot(bar3)
+```
+
+# using ggpairs
+```{r}
+p1 =  ggpairs(midwest, 
+              columns = c("perchsd", "percollege", "state"),
+              columnLabels = c("High school grad", "College grad", "State"),
+              mapping = aes(color = state))
+p1
+```
+
+# 4. Random Scatterplots
+
+```{r}
+n = c(100, 200, 500, 750, 1000, 1200, 1800, 3000,
+      5000, 8000, 10000, 12500, 15000, 18000, 22000, 
+      23500, 25000, 50000, 80000, 100100, 120100, 
+      135000, 150000, 175000, 195010, 200100,
+      250000, 300100, 350000, 400100, 450000, 500100)
+
+width.height = c(3, 15) # in inch and check with 3 inch as well
+# create empty vectors for file size for each file.type
+ps_size_3 = numeric()
+pdf_size_3 = numeric()
+jpeg_size_3 = numeric()
+png_size_3 = numeric()
+
+ps_size_15 = numeric()
+pdf_size_15 = numeric()
+jpeg_size_15 = numeric()
+png_size_15 = numeric()
+
+for (i in 1:length(n)){
+  df = data.frame(x_axis = runif(n[i]),
+                  y_axis = runif(n[i]))
+  p.scatter = ggplot(df, aes(x=x_axis, y=y_axis)) + geom_point()
+  
+  for (j in 1:length(width.height)) {
+
+    ggsave(sprintf("%s_%s_scatter.ps", n[i], width.height[j]), p.scatter,
+            width = width.height[j], height = width.height[j], units = c("in"))
+    ggsave(sprintf("%s_%s_scatter.pdf", n[i], width.height[j]), p.scatter,
+            width = width.height[j], height = width.height[j], units = c("in"))
+    ggsave(sprintf("%s_%s_scatter.jpeg", n[i], width.height[j]), p.scatter,
+            width = width.height[j], height = width.height[j], units = c("in"))
+    ggsave(sprintf("%s_%s_scatter.png", n[i], width.height[j]), p.scatter,
+            width = width.height[j], height = width.height[j], units = c("in"))
+    
+    # create vector for width = 3
+    if (j == 1) {
+      ps_size_3 = c(ps_size_3, file.size(sprintf("%s_%s_scatter.ps", n[i], width.height[j])))
+      pdf_size_3 = c(pdf_size_3, file.size(sprintf("%s_%s_scatter.pdf", n[i], width.height[j])))
+      jpeg_size_3 = c(jpeg_size_3, file.size(sprintf("%s_%s_scatter.jpeg", n[i], width.height[j])))
+      png_size_3 = c(png_size_3, file.size(sprintf("%s_%s_scatter.png", n[i], width.height[j])))
+    }
+    
+    # create vector for width = 15
+    if (j == 2) {
+      ps_size_15 = c(ps_size_15, file.size(sprintf("%s_%s_scatter.ps", n[i], width.height[j])))
+      pdf_size_15 = c(pdf_size_15, file.size(sprintf("%s_%s_scatter.pdf", n[i], width.height[j])))
+      jpeg_size_15 = c(jpeg_size_15, file.size(sprintf("%s_%s_scatter.jpeg", n[i], width.height[j])))
+      png_size_15 = c(png_size_15, file.size(sprintf("%s_%s_scatter.png", n[i], width.height[j])))
+    }	
+  }  
+}
+```
+
+	
+```{r}
+df_sizes_3 = data.frame("N" = n,
+                        "ps_size" = ps_size_3,
+                        "pdf_size" = pdf_size_3,
+                        "jpeg_size" = jpeg_size_3,
+                        "png_size" = png_size_3)
+
+df_sizes_15 = data.frame("N" = n,
+                         "ps_size" = ps_size_15,
+                         "pdf_size" = pdf_size_15,
+                         "jpeg_size" = jpeg_size_15,
+                         "png_size" = png_size_15)
+```
+
+
+```{r}
+write.csv(file = "df_3.csv", x = df_sizes_3)
+write.csv(file = "df_15.csv", x = df_sizes_15)
+```
+
+# for all data set for width 3
+```{r}
+p3.whole = ggplot(data=df_sizes_3, aes(x=N)) +
+  geom_line(aes(y = ps_size, color = "ps")) +
+  geom_line(aes(y = pdf_size, color = "pdf")) +
+  geom_line(aes(y = jpeg_size, color = "jpeg")) +
+  geom_line(aes(y = png_size, color = "png")) +
+  ylab(label="File size [bytes] vs. N - whole data set") + 
+  xlab("N")
+
+p3.whole
+```
+
+
+# for N <= 15000 for width 3
+```{r}
+p3.15k = ggplot(data=subset(df_sizes_3, N <= 15000), aes(x=N)) +
+  geom_line(aes(y = ps_size, color = "ps")) +
+  geom_line(aes(y = pdf_size, color = "pdf")) +
+  geom_line(aes(y = jpeg_size, color = "jpeg")) +
+  geom_line(aes(y = png_size, color = "png")) +
+  ylab(label="File size [bytes] vs. N, N <= 15000") + 
+  xlab("N")
+
+p3.15k
+```
+
+
+# for all data set for width 15
+```{r}
+p15.whole = ggplot(data=df_sizes_15, aes(x=N)) +
+  geom_line(aes(y = ps_size, color = "ps")) +
+  geom_line(aes(y = pdf_size, color = "pdf")) +
+  geom_line(aes(y = jpeg_size, color = "jpeg")) +
+  geom_line(aes(y = png_size, color = "png")) +
+  ylab(label="File size [bytes] vs. N - whole data set") + 
+  xlab("N")
+
+p15.whole
+```
+
+
+# for N <= 15000 for width 15
+```{r}
+p15.15k = ggplot(data=subset(df_sizes_15, N <= 15000), aes(x=N)) +
+  geom_line(aes(y = ps_size, color = "ps")) +
+  geom_line(aes(y = pdf_size, color = "pdf")) +
+  geom_line(aes(y = jpeg_size, color = "jpeg")) +
+  geom_line(aes(y = png_size, color = "png")) +
+  ylab(label="File size [bytes] vs. N, N <= 15000") + 
+  xlab("N")
+
+p15.15k
+```
+
+
+# 5 Diamonds
+
+```{r}
+data(diamonds)
+```
+
+
+# bar graph for color
+
+```{r}
+p5.color = ggplot(data = diamonds, aes(color, fill = color)) +
+            geom_bar(color = 'black') +
+            xlab("Color") + ylab("Count") +
+            ggtitle("Count vs. diamond color")
+
+p5.color
+```
+
+
+# histogram for price
+
+```{r}
+p5.price = ggplot(data = diamonds, aes(price)) +
+  geom_histogram(color = 'black', fill = 'orange', binwidth = 1000) +
+  xlab("Price") + ylab("Count") +
+  ggtitle("Count vs. diamond price")
+
+p5.price
+```
+
+
+# histogram for carat
+do not put any limits
+```{r}
+p5.carat.nolmt = ggplot(data = diamonds, aes(carat)) +
+  geom_histogram(color = 'black', fill = 'green', binwidth = .1) +
+  scale_x_continuous(limits = c(0, 5)) +
+  xlab("Carat") + ylab("Count") +
+  ggtitle("Count vs. diamond carat")
+
+p5.carat.nolmt
+```
+
+
+```{r}
+p5.carat.lmt = ggplot(data = diamonds, aes(carat)) +
+  geom_histogram(color = 'black', fill = 'green', binwidth = .2) +
+  scale_x_continuous(limits = c(0, 3)) +
+  xlab("Carat") + ylab("Count") +
+  ggtitle("Count vs. diamond carat")
+
+p5.carat.lmt
+```
+
+
+```{r}
+p5a =  ggpairs(diamonds, 
+              columns = c("color", "carat", "price"),
+              columnLabels = c("Color", "Carat", "Price"),
+              mapping = aes(color = color))
+p5a
+```
+
+
+```{r}
+p5b =  ggplot(aes(x = carat, y = price, color = color), data = diamonds) + 
+  geom_point(alpha = 0.5, size = 1, position = 'jitter') +
+  ggtitle('Price of diamonds by carat and color')
+
+p5b
+```
+
+
+
+
+
